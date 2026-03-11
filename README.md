@@ -62,6 +62,18 @@ Optional advisory LLM enrichment for eligible demo cases:
 
 The demo is intentionally small and curated. It shows how the engine behaves on representative cases. It is not a claim of complete proof across arbitrary repositories.
 
+Single-file mixed demo case:
+
+```bash
+./build/sast-cli scan --repo tests/demo/mixed_case --format text
+```
+
+That file is designed to show three outcomes from one readable C++ source file:
+
+- one confirmed unsafe path
+- one suspicious-looking path that is deterministically dismissed as safe
+- one ambiguous path that still requires review
+
 ## Key Features
 
 - Deterministic C++ scanning with Clang LibTooling

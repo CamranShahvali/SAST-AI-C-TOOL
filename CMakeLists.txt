@@ -138,6 +138,7 @@ add_executable(
   tests/integration/cli_scan_test.cpp
   tests/integration/llm_review_scan_test.cpp
   tests/integration/cli_facts_test.cpp
+  tests/integration/mixed_demo_case_test.cpp
   tests/integration/scan_integration_test.cpp
   tests/integration/scan_metrics_test.cpp
   tests/integration/regression_suite_test.cpp
