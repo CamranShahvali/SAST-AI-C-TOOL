@@ -74,6 +74,31 @@ That file is designed to show three outcomes from one readable C++ source file:
 - one suspicious-looking path that is deterministically dismissed as safe
 - one ambiguous path that still requires review
 
+## Interactive Terminal Mode
+
+The CLI also includes an interactive text launcher:
+
+```bash
+./build/sast-cli interactive
+```
+
+It shows:
+
+- a branded startup banner
+- engine status
+- gateway detection status
+- the active local model when the gateway is reachable
+- a menu for repository scans, single-file scans, demos, and setup/tutorial help
+
+The launcher is terminal-only by design. It will not show the banner when:
+
+- `--format json` is requested
+- `--format sarif` is requested
+- `CI` is set
+- stdout is not a terminal
+
+The interactive mode is a thin launcher over the existing commands. It does not change the scan pipeline, validators, JSON output, or SARIF output.
+
 ## Key Features
 
 - Deterministic C++ scanning with Clang LibTooling

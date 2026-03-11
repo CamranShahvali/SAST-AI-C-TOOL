@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "sast/build/compilation_database_locator.hpp"
+#include "sast/cli/interactive_terminal.hpp"
 #include "sast/frontend_cpp/tooling_runner.hpp"
 #include "sast/ingest/file_inventory.hpp"
 #include "sast/report/candidate_json_writer.hpp"
@@ -43,6 +44,13 @@ struct ParsedDemoArgs {
   bool llm_review = false;
   std::string llm_gateway_url = "http://127.0.0.1:8081";
   double llm_timeout_seconds = 25.0;
+};
+
+struct ParsedInteractiveArgs {
+  std::string format = "text";
+  std::string llm_gateway_url = "http://127.0.0.1:8081";
+  double llm_timeout_seconds = 2.0;
+  std::string default_model = "deepseek-coder:6.7b";
 };
 
 struct DemoCaseSpec {
@@ -133,6 +141,24 @@ ParsedDemoArgs parse_demo_args(const std::vector<std::string>& args) {
   return parsed;
 }
 
+ParsedInteractiveArgs parse_interactive_args(const std::vector<std::string>& args) {
+  ParsedInteractiveArgs parsed;
+  parsed.llm_gateway_url = env_or_default("SAST_LLM_GATEWAY_URL", parsed.llm_gateway_url);
+  parsed.llm_timeout_seconds = std::stod(env_or_default("SAST_LLM_GATEWAY_TIMEOUT", "2"));
+  parsed.default_model = env_or_default("SAST_LLM_MODEL", parsed.default_model);
+  for (std::size_t index = 0; index < args.size(); ++index) {
+    const auto& arg = args[index];
+    if (arg == "--format") {
+      parsed.format = require_value(args, index);
+      ++index;
+    } else if (arg == "--llm-gateway") {
+      parsed.llm_gateway_url = require_value(args, index);
+      ++index;
+    }
+  }
+  return parsed;
+}
+
 std::filesystem::path builtin_demo_repo() {
   return std::filesystem::path(SAST_SOURCE_ROOT) / "tests" / "demo" / "curated";
 }
@@ -204,7 +230,7 @@ void write_output(
 
 int Application::run(const std::vector<std::string>& args) const {
   if (args.empty()) {
-    std::cerr << "usage: sast-cli <facts|scan|demo> ...\n";
+    std::cerr << "usage: sast-cli <facts|scan|demo|interactive> ...\n";
     return 1;
   }
 
@@ -216,6 +242,9 @@ int Application::run(const std::vector<std::string>& args) const {
   }
   if (args.front() == "demo") {
     return run_demo(std::vector<std::string>(args.begin() + 1, args.end()));
+  }
+  if (args.front() == "interactive") {
+    return run_interactive(std::vector<std::string>(args.begin() + 1, args.end()));
   }
 
   std::cerr << "unknown command: " << args.front() << '\n';
@@ -354,6 +383,27 @@ int Application::run_demo(const std::vector<std::string>& args) const {
 
   write_output(parsed.out, output);
   return 0;
+}
+
+int Application::run_interactive(const std::vector<std::string>& args) const {
+  const auto parsed = parse_interactive_args(args);
+  const auto environment = InteractiveTerminal::detect_environment();
+  if (!InteractiveTerminal::supported(parsed.format, environment)) {
+    std::cerr
+      << "interactive mode requires text output, a real terminal, and no CI environment.\n";
+    return 2;
+  }
+
+  InteractiveTerminal terminal(
+    std::cin,
+    std::cout,
+    std::cerr,
+    [this](const std::vector<std::string>& command) { return run(command); });
+  return terminal.run({
+    .gateway_url = parsed.llm_gateway_url,
+    .gateway_timeout_seconds = parsed.llm_timeout_seconds,
+    .default_model = parsed.default_model,
+  });
 }
 
 }  // namespace sast::cli
