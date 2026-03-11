@@ -1,0 +1,68 @@
+AI_SAST MAINTAINER COMMANDS
+===========================
+
+Project location
+----------------
+cd ~/projects/demo
+
+Build project
+-------------
+cmake --build --preset clang18-debug
+
+Run C++ tests
+-------------
+ctest --preset clang18-debug --output-on-failure
+
+Run Python gateway tests
+------------------------
+source .venv/bin/activate
+python -m pytest llm_gateway/tests
+
+Run deterministic scan
+----------------------
+./build/sast-cli scan --repo tests/demo/mixed_case --format text
+
+Run scan with LLM
+-----------------
+./build/sast-cli scan \
+  --repo tests/demo/mixed_case \
+  --format text \
+  --llm-review \
+  --llm-gateway http://127.0.0.1:8081
+
+Run curated demo
+----------------
+./build/sast-cli demo
+
+Run curated demo with LLM
+-------------------------
+./build/sast-cli demo \
+  --llm-review \
+  --llm-gateway http://127.0.0.1:8081
+
+Start LLM gateway
+-----------------
+source .venv/bin/activate
+
+export SAST_LLM_ENABLED=1
+export SAST_LLM_PROVIDER=ollama
+export SAST_LLM_BASE_URL=http://127.0.0.1:11434
+export SAST_LLM_MODEL=deepseek-coder:6.7b
+
+uvicorn llm_gateway.app.main:app --host 127.0.0.1 --port 8081
+
+Check gateway
+-------------
+curl http://127.0.0.1:8081/health | jq .
+
+Run interactive CLI
+-------------------
+./build/sast-cli interactive
+
+Record demo
+-----------
+asciinema rec -c "./docs/demo/run_demo.expect" demo.cast
+
+Convert to gif
+--------------
+agg demo.cast docs/demo/demo.gif
