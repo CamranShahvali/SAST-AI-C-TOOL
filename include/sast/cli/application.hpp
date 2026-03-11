@@ -14,6 +14,7 @@ class Application {
   [[nodiscard]] int run_facts(const std::vector<std::string>& args) const;
   [[nodiscard]] int run_scan(const std::vector<std::string>& args) const;
   [[nodiscard]] int run_demo(const std::vector<std::string>& args) const;
+  [[nodiscard]] int run_interactive(const std::vector<std::string>& args) const;
 };
 
 }  // namespace sast::cli

@@ -95,7 +95,8 @@ target_link_libraries(
 
 add_library(
   sast_cli_lib
-  src/cli/application.cpp)
+  src/cli/application.cpp
+  src/cli/interactive_terminal.cpp)
 
 target_link_libraries(sast_cli_lib PUBLIC sast_core)
 
@@ -143,6 +144,7 @@ add_executable(
   tests/integration/scan_metrics_test.cpp
   tests/integration/regression_suite_test.cpp
   tests/unit/compilation_database_locator_test.cpp
+  tests/unit/interactive_terminal_test.cpp
   tests/integration/fact_extraction_test.cpp
   tests/unit/llm_review_client_test.cpp
   tests/unit/report_writer_golden_test.cpp

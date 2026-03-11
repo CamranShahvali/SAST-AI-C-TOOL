@@ -40,6 +40,20 @@ def _judgment_guidance(request: ReviewRequest) -> str:
             "Avoid phrases such as 'buffer overflow vulnerability', 'vulnerable', or 'exploit is possible'.\n"
             "Keep the returned judgment as needs_review.\n"
         )
+    if request.current_judgment == "likely_issue":
+        return (
+            "The deterministic judgment is likely_issue.\n"
+            "Keep the result below confirmed_issue.\n"
+            "Explain why the risk is real enough to escalate, but why proof is still incomplete.\n"
+            "Do not describe this as fully confirmed or completely exploitable.\n"
+        )
+    if request.current_judgment == "likely_safe":
+        return (
+            "The deterministic judgment is likely_safe.\n"
+            "Do not frame this as a real vulnerability.\n"
+            "Explain that safety evidence exists, but the compact context does not yet prove a full safety barrier.\n"
+            "Phrase any remediation as a way to make the safety proof more explicit at the sink.\n"
+        )
     return "Do not overstate certainty beyond the deterministic judgment.\n"
 
 
@@ -67,25 +81,106 @@ def _is_generic_remediation(remediation: str | None) -> bool:
     if remediation is None:
         return True
     normalized = remediation.lower()
+    if normalized.strip() in {"unknown", "n/a", "na", "none", "null"}:
+        return True
     return (
         "sanitize input" in normalized or
         "review the trace" in normalized or
         "review the deterministic trace" in normalized or
-        "safer api" in normalized
+        "safer api" in normalized or
+        "no additional remediation required" in normalized
     )
 
 
-def _concrete_remediation(request: ReviewRequest) -> str:
+def _split_guard_summary(request: ReviewRequest) -> tuple[str | None, str | None, str | None, str]:
+    safe = None
+    ambiguous = None
+    positive = None
+    fallback = request.guard_summary.strip().rstrip(".")
+
+    for raw_part in request.guard_summary.split("|"):
+        part = raw_part.strip().rstrip(".")
+        normalized = part.lower()
+        if normalized.startswith("safe:"):
+            safe = part[5:].strip()
+        elif normalized.startswith("ambiguous:"):
+            ambiguous = part[10:].strip()
+        elif normalized.startswith("positive:"):
+            positive = part[9:].strip()
+
+    return safe, ambiguous, positive, fallback
+
+
+def _needs_review_remediation(request: ReviewRequest) -> str:
     sink = request.sink_summary.lower()
     if request.rule_id == "command_injection.system":
-        return "Replace shell-style command construction with execve or spawn using a fixed argv vector, or apply a strict allowlist immediately before the command sink."
+        return "Use a fixed argv vector or apply a strict allowlist immediately before the command sink."
     if request.rule_id == "path_traversal.file_open":
-        return "Canonicalize the path under a fixed root and reject any escape from that root before passing the result to the file-open sink."
+        return "Constrain the path under a fixed trusted root before the file-open sink and reject any escape from that root."
     if request.rule_id == "dangerous_string.unbounded_copy":
         if "memcpy" in sink or "memmove" in sink:
-            return "Tie the copy length to the destination extent, for example sizeof(destination), and reject or clamp larger runtime lengths before the memcpy-style sink."
-        return "Use a bounded write API and tie the bound to the destination extent instead of an unchecked runtime length."
-    return "Apply a concrete guard directly at the sink and keep the deterministic evidence explicit."
+            return "Check the runtime length against the destination extent before the memcpy-style sink, or tie the bound directly to sizeof(destination)."
+        return "Use a bounded write API and tie the bound directly to the destination extent."
+    return "Add an explicit guard directly at the sink and keep the deterministic evidence visible."
+
+
+def _likely_issue_remediation(request: ReviewRequest) -> str:
+    sink = request.sink_summary.lower()
+    if request.rule_id == "command_injection.system":
+        return "Make the command path explicit with a fixed argv vector or a strict allowlist immediately before the command sink."
+    if request.rule_id == "path_traversal.file_open":
+        return "Constrain the path under a fixed trusted root immediately before the file-open sink and reject escapes from that root."
+    if request.rule_id == "dangerous_string.unbounded_copy":
+        if "memcpy" in sink or "memmove" in sink:
+            return "Check the runtime length against the destination extent before the memcpy-style sink and reject larger values."
+        return "Use a bounded write API and keep the bound adjacent to the destination extent."
+    return "Make the missing guard explicit at the sink so the remaining proof gap is removed."
+
+
+def _likely_safe_remediation(request: ReviewRequest) -> str:
+    sink = request.sink_summary.lower()
+    if request.rule_id == "command_injection.system":
+        return "For a stronger safety proof, keep a fixed argv vector or place an explicit allowlist immediately before the command sink."
+    if request.rule_id == "path_traversal.file_open":
+        return "For a stronger safety proof, canonicalize the path under a fixed trusted root immediately before the file-open sink."
+    if request.rule_id == "dangerous_string.unbounded_copy":
+        if "memcpy" in sink or "memmove" in sink:
+            return "For a stronger safety proof, check the runtime length against the destination extent and tie the copy bound directly to that extent before the memcpy-style sink."
+        return "For a stronger safety proof, keep the bound adjacent to the destination extent and use a bounded write API."
+    return "For a stronger safety proof, keep the safety guard explicit and adjacent to the sink."
+
+
+def _preferred_remediation(request: ReviewRequest) -> str:
+    if request.current_judgment == "needs_review":
+        return _needs_review_remediation(request)
+    if request.current_judgment == "likely_issue":
+        return _likely_issue_remediation(request)
+    if request.current_judgment == "likely_safe":
+        return _likely_safe_remediation(request)
+    return _needs_review_remediation(request)
+
+
+def _overstates_likely_safe(remediation: str | None) -> bool:
+    if remediation is None:
+        return False
+    normalized = remediation.lower()
+    return (
+        "vulnerab" in normalized or
+        "exploit" in normalized or
+        "sanitize input" in normalized
+    )
+
+
+def _overstates_uncertain_remediation(remediation: str | None) -> bool:
+    if remediation is None:
+        return False
+    normalized = remediation.lower()
+    return (
+        "vulnerab" in normalized or
+        "buffer overflow" in normalized or
+        "exploit" in normalized or
+        "compromis" in normalized
+    )
 
 
 def _needs_review_reasoning(request: ReviewRequest) -> str:
@@ -100,33 +195,97 @@ def _needs_review_reasoning(request: ReviewRequest) -> str:
     return " ".join(parts)
 
 
+def _likely_issue_reasoning(request: ReviewRequest) -> str:
+    safe, ambiguous, positive, fallback = _split_guard_summary(request)
+    parts = [
+        "Deterministic judgment remains likely_issue because the compact context shows elevated risk at the sink, but the proof is still incomplete."
+    ]
+    if positive:
+        parts.append(f"Risk signal: {positive}.")
+    if ambiguous:
+        parts.append(f"Unresolved point: {ambiguous}.")
+    elif fallback:
+        parts.append(f"Unresolved point: {fallback}.")
+    elif safe:
+        parts.append(f"Some safety evidence exists, but it does not yet close the proof gap: {safe}.")
+    return " ".join(parts)
+
+
+def _likely_safe_reasoning(request: ReviewRequest) -> str:
+    safe, ambiguous, _, fallback = _split_guard_summary(request)
+    parts = [
+        "Deterministic judgment remains likely_safe because the compact context shows a safety signal near the sink, but the proof is still incomplete."
+    ]
+    if safe:
+        parts.append(f"Current safety signal: {safe}.")
+    if ambiguous:
+        parts.append(f"Remaining gap: {ambiguous}.")
+    elif not safe and fallback:
+        parts.append(f"Remaining gap: {fallback}.")
+    return " ".join(parts)
+
+
 def _normalize_review_response(
     request: ReviewRequest,
     response: ReviewResponse,
     provider_status: str | None = None,
 ) -> ReviewResponse:
-    if request.current_judgment != "needs_review":
-        normalized = response
-        if provider_status is not None:
-            normalized = normalized.model_copy(update={"provider_status": provider_status})
+    remediation = response.remediation
+    if request.current_judgment == "needs_review":
+        if _is_generic_remediation(remediation) or _overstates_uncertain_remediation(remediation):
+            remediation = _preferred_remediation(request)
+
+        normalized = response.model_copy(
+            update={
+                "judgment": "needs_review",
+                "confidence": min(response.confidence, request.confidence),
+                "exploitability": "unknown",
+                "reasoning_summary": _truncate(_needs_review_reasoning(request)),
+                "remediation": _truncate(remediation) if remediation is not None else None,
+                "safe_reasoning": None,
+                "provider_status": provider_status or response.provider_status,
+            }
+        )
         validate_review_response(normalized)
         return normalized
 
-    remediation = response.remediation
-    if _is_generic_remediation(remediation):
-        remediation = _concrete_remediation(request)
+    if request.current_judgment == "likely_issue":
+        remediation = _preferred_remediation(request)
 
-    normalized = response.model_copy(
-        update={
-            "judgment": "needs_review",
-            "confidence": min(response.confidence, request.confidence),
-            "exploitability": "unknown",
-            "reasoning_summary": _truncate(_needs_review_reasoning(request)),
-            "remediation": _truncate(remediation) if remediation is not None else None,
-            "safe_reasoning": None,
-            "provider_status": provider_status or response.provider_status,
-        }
-    )
+        normalized = response.model_copy(
+            update={
+                "judgment": "likely_issue",
+                "confidence": min(response.confidence, request.confidence),
+                "reasoning_summary": _truncate(_likely_issue_reasoning(request)),
+                "remediation": _truncate(remediation) if remediation is not None else None,
+                "safe_reasoning": None,
+                "provider_status": provider_status or response.provider_status,
+            }
+        )
+        validate_review_response(normalized)
+        return normalized
+
+    if request.current_judgment == "likely_safe":
+        safe, _, _, _ = _split_guard_summary(request)
+        remediation = _preferred_remediation(request)
+
+        normalized = response.model_copy(
+            update={
+                "judgment": "likely_safe",
+                "confidence": min(response.confidence, request.confidence),
+                "reasoning_summary": _truncate(_likely_safe_reasoning(request)),
+                "remediation": _truncate(remediation) if remediation is not None else None,
+                "safe_reasoning": _truncate(safe) if safe else None,
+                "provider_status": provider_status or response.provider_status,
+            }
+        )
+        validate_review_response(normalized)
+        return normalized
+
+    updates: dict[str, object] = {}
+    if provider_status is not None:
+        updates["provider_status"] = provider_status
+    normalized = response if not updates else response.model_copy(update=updates)
     validate_review_response(normalized)
     return normalized
 
@@ -171,7 +330,7 @@ class MockProvider(BaseProvider):
                 cwe=self._cwe_by_rule.get(request.rule_id),
                 exploitability="medium" if request.provisional_severity in {"high", "critical"} else "low",
                 reasoning_summary="Mock provider reviewed the compact structured finding context conservatively.",
-                remediation=_concrete_remediation(request),
+                remediation=_preferred_remediation(request),
                 safe_reasoning=None,
                 provider_status="mock",
             )

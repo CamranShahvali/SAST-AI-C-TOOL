@@ -93,11 +93,18 @@ def test_service_falls_back_when_provider_fails() -> None:
 def test_service_routes_likely_safe_when_proof_is_incomplete() -> None:
     settings = GatewaySettings(provider="mock", api_key="unused", max_retries=1)
     service = ReviewService(MockProvider(settings), settings)
-    request = sample_request("likely_safe", "low")
+    request = sample_request("likely_safe", "low").model_copy(
+        update={
+            "rule_id": "path_traversal.file_open",
+            "sink_summary": 'fopen(path.c_str(), "r")',
+            "guard_summary": "safe: path allowlist predicate constrains user input | ambiguous: path allowlist exists but root confinement proof is incomplete",
+        }
+    )
     response = asyncio.run(service.review(request))
     assert response.provider_status == "mock"
     assert response.judgment == "likely_safe"
     assert response.safe_reasoning is not None
+    assert "path allowlist predicate constrains user input" in response.safe_reasoning
 
 
 def test_service_can_disable_review_by_configuration() -> None:
