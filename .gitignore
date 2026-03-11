@@ -1,0 +1,44 @@
+build/
+.cache/
+.sast/
+.venv/
+.venv-vllm/
+tests/fixtures/*/build/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+*.swp
+compile_commands.json
+# Build artifacts
+build/
+*.o
+*.so
+*.a
+*.out
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated outputs
+*.json
+*.sarif
+
+# Environment variables
+.env
+.env.*
