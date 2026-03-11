@@ -4,7 +4,7 @@ project(
   ai_sast
   VERSION 0.2.0
   DESCRIPTION "C++-first AI-assisted SAST engine"
-  LANGUAGES CXX)
+  LANGUAGES C CXX)
 
 enable_testing()
 
@@ -41,8 +41,11 @@ FetchContent_Declare(
 FetchContent_Declare(
   googletest
   URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz)
+FetchContent_Declare(
+  cpp_httplib
+  URL https://github.com/yhirose/cpp-httplib/archive/refs/tags/v0.18.5.tar.gz)
 
-FetchContent_MakeAvailable(nlohmann_json googletest)
+FetchContent_MakeAvailable(nlohmann_json googletest cpp_httplib)
 
 add_library(
   sast_core
@@ -50,6 +53,7 @@ add_library(
   src/build/compilation_database_locator.cpp
   src/frontend_cpp/tooling_runner.cpp
   src/ingest/file_inventory.cpp
+  src/llm_gateway/review_client.cpp
   src/report/candidate_json_writer.cpp
   src/report/demo_report_writer.cpp
   src/report/facts_json_writer.cpp
@@ -85,6 +89,7 @@ target_link_libraries(
   sast_core
   PUBLIC
     nlohmann_json::nlohmann_json
+    httplib::httplib
     clang-cpp
     LLVM)
 
@@ -131,12 +136,14 @@ add_executable(
   tests/integration/cli_demo_test.cpp
   tests/integration/cli_report_formats_test.cpp
   tests/integration/cli_scan_test.cpp
+  tests/integration/llm_review_scan_test.cpp
   tests/integration/cli_facts_test.cpp
   tests/integration/scan_integration_test.cpp
   tests/integration/scan_metrics_test.cpp
   tests/integration/regression_suite_test.cpp
   tests/unit/compilation_database_locator_test.cpp
   tests/integration/fact_extraction_test.cpp
+  tests/unit/llm_review_client_test.cpp
   tests/unit/report_writer_golden_test.cpp
   tests/unit/source_sink_registry_test.cpp
   tests/unit/validator_test.cpp)

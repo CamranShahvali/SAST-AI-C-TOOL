@@ -136,6 +136,17 @@ struct ValidationEvidence {
   std::optional<SourceLocation> location;
 };
 
+struct LlmReview {
+  Decision judgment = Decision::needs_review;
+  double confidence = 0.0;
+  std::optional<std::string> cwe;
+  std::string exploitability = "unknown";
+  std::string reasoning_summary;
+  std::optional<std::string> remediation;
+  std::optional<std::string> safe_reasoning;
+  std::string provider_status = "fallback";
+};
+
 struct ValidationResult {
   Decision final_decision = Decision::needs_review;
   double confidence = 0.0;
@@ -147,6 +158,7 @@ struct ValidationResult {
   std::vector<std::string> safe_reasoning;
   std::vector<std::string> ambiguous_reasoning;
   std::vector<std::string> suppressions;
+  std::optional<LlmReview> llm_review;
 };
 
 struct FinalFinding {
@@ -361,6 +373,36 @@ inline void from_json(const nlohmann::json& json, ValidationEvidence& value) {
                      : std::nullopt;
 }
 
+inline void to_json(nlohmann::json& json, const LlmReview& value) {
+  json = nlohmann::json{
+    {"judgment", to_string(value.judgment)},
+    {"confidence", value.confidence},
+    {"exploitability", value.exploitability},
+    {"reasoning_summary", value.reasoning_summary},
+    {"provider_status", value.provider_status},
+  };
+  json["cwe"] = value.cwe ? nlohmann::json(*value.cwe) : nlohmann::json(nullptr);
+  json["remediation"] = value.remediation ? nlohmann::json(*value.remediation) : nlohmann::json(nullptr);
+  json["safe_reasoning"] = value.safe_reasoning ? nlohmann::json(*value.safe_reasoning) : nlohmann::json(nullptr);
+}
+
+inline void from_json(const nlohmann::json& json, LlmReview& value) {
+  value.judgment = decision_from_string(json.value("judgment", "needs_review"));
+  value.confidence = json.value("confidence", 0.0);
+  value.cwe = json.contains("cwe") && !json.at("cwe").is_null()
+                ? std::optional<std::string>(json.at("cwe").get<std::string>())
+                : std::nullopt;
+  value.exploitability = json.value("exploitability", "unknown");
+  value.reasoning_summary = json.value("reasoning_summary", "");
+  value.remediation = json.contains("remediation") && !json.at("remediation").is_null()
+                        ? std::optional<std::string>(json.at("remediation").get<std::string>())
+                        : std::nullopt;
+  value.safe_reasoning = json.contains("safe_reasoning") && !json.at("safe_reasoning").is_null()
+                           ? std::optional<std::string>(json.at("safe_reasoning").get<std::string>())
+                           : std::nullopt;
+  value.provider_status = json.value("provider_status", "fallback");
+}
+
 inline void to_json(nlohmann::json& json, const ValidationResult& value) {
   json = nlohmann::json{
     {"final_decision", to_string(value.final_decision)},
@@ -374,6 +416,9 @@ inline void to_json(nlohmann::json& json, const ValidationResult& value) {
     {"ambiguous_reasoning", value.ambiguous_reasoning},
     {"suppressions", value.suppressions},
   };
+  if (value.llm_review) {
+    json["llm_review"] = *value.llm_review;
+  }
 }
 
 inline void from_json(const nlohmann::json& json, ValidationResult& value) {
@@ -390,6 +435,9 @@ inline void from_json(const nlohmann::json& json, ValidationResult& value) {
   value.safe_reasoning = json.value("safe_reasoning", std::vector<std::string>{});
   value.ambiguous_reasoning = json.value("ambiguous_reasoning", std::vector<std::string>{});
   value.suppressions = json.value("suppressions", std::vector<std::string>{});
+  value.llm_review = json.contains("llm_review") && !json.at("llm_review").is_null()
+                       ? std::optional<LlmReview>(json.at("llm_review").get<LlmReview>())
+                       : std::nullopt;
 }
 
 inline void to_json(nlohmann::json& json, const FinalFinding& value) {

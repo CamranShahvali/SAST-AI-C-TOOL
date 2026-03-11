@@ -115,3 +115,11 @@ def test_service_does_not_route_confirmed_issue() -> None:
     response = asyncio.run(service.review(sample_request("confirmed_issue", "critical")))
     assert response.provider_status == "fallback"
     assert "routing policy" in response.reasoning_summary
+
+
+def test_service_does_not_route_safe_suppressed() -> None:
+    settings = GatewaySettings(provider="mock", api_key="unused", max_retries=1)
+    service = ReviewService(MockProvider(settings), settings)
+    response = asyncio.run(service.review(sample_request("safe_suppressed", "low")))
+    assert response.provider_status == "fallback"
+    assert "routing policy" in response.reasoning_summary

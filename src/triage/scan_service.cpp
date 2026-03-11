@@ -8,6 +8,7 @@
 #include "sast/build/compilation_database_locator.hpp"
 #include "sast/frontend_cpp/tooling_runner.hpp"
 #include "sast/ingest/file_inventory.hpp"
+#include "sast/llm_gateway/review_client.hpp"
 #include "sast/rules/candidate_detector.hpp"
 #include "sast/rules/rule_registry.hpp"
 #include "sast/rules/source_sink_registry.hpp"
@@ -131,6 +132,23 @@ ScanBundle ScanService::scan(const ScanOptions& options) const {
   }
   bundle.metrics.validation_time_ms = milliseconds_since(validation_start, Clock::now());
   bundle.metrics.finding_count = bundle.validated.findings.size();
+
+  if (options.llm_review && !bundle.validated.findings.empty()) {
+    const auto llm_start = Clock::now();
+    const llm_gateway::ReviewClient review_client(
+      {
+        .gateway_url = options.llm_gateway_url,
+        .timeout_seconds = options.llm_timeout_seconds,
+      },
+      options.llm_transport);
+    for (auto& finding : bundle.validated.findings) {
+      if (const auto review = review_client.review(finding)) {
+        finding.validation.llm_review = *review;
+      }
+    }
+    bundle.metrics.llm_latency_ms = milliseconds_since(llm_start, Clock::now());
+  }
+
   bundle.metrics.memory_rss_bytes = current_rss_bytes();
   bundle.metrics.full_scan_time_ms = milliseconds_since(full_start, Clock::now());
 

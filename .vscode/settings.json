@@ -1,0 +1,13 @@
+{
+  "cmake.useCMakePresets": "always",
+  "cmake.configureOnOpen": true,
+  "cmake.defaultConfigurePreset": "clang18-debug",
+  "cmake.defaultBuildPreset": "clang18-debug",
+  "cmake.defaultTestPreset": "clang18-debug",
+  "cmake.preferredGenerators": [
+    "Ninja"
+  ],
+  "C_Cpp.default.compilerPath": "/usr/bin/clang++-18",
+  "C_Cpp.default.intelliSenseMode": "linux-clang-x64",
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json"
+}

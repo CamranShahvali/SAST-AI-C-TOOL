@@ -44,10 +44,33 @@ pip install -r llm_gateway/requirements.txt -r llm_gateway/requirements-dev.txt
 
 ## Build
 
+Recommended local configure for both the CLI and VS Code CMake Tools:
+
+```bash
+cmake --preset clang18-debug
+cmake --build --preset clang18-debug
+```
+
+VS Code note:
+
+- the repo includes `CMakePresets.json` to force `clang-18`, `clang++-18`, `Ninja`, `LLVM_DIR`, and `Clang_DIR`
+- `.vscode/settings.json` tells CMake Tools to use presets instead of guessing a GCC/G++ toolchain
+- the workspace also points VS Code C/C++ IntelliSense at `build/compile_commands.json` and `clang++-18`
+
+If VS Code was previously configured with GCC/G++, do this once after pulling the repo changes:
+
+1. `Ctrl+Shift+P` -> `CMake: Delete Cache and Reconfigure`
+2. `Ctrl+Shift+P` -> `CMake: Select Configure Preset`
+3. choose `Clang 18 Debug`
+4. wait for configure to finish
+
+Manual equivalent:
+
 ```bash
 cmake -S . -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_CXX_COMPILER=clang++-18 \
+  -DCMAKE_C_COMPILER=clang-18 \
   -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm \
   -DClang_DIR=/usr/lib/llvm-18/lib/cmake/clang
 
@@ -57,7 +80,7 @@ cmake --build build
 ## Test
 
 ```bash
-ctest --test-dir build --output-on-failure
+ctest --preset clang18-debug
 source .venv/bin/activate
 python -m pytest llm_gateway/tests
 ```
@@ -134,11 +157,14 @@ source .venv/bin/activate
 pip install -r llm_gateway/requirements.txt -r llm_gateway/requirements-dev.txt
 ```
 
-Run the gateway with the default mock provider:
+Run the gateway with the default local Ollama provider:
 
 ```bash
 source .venv/bin/activate
-export SAST_LLM_PROVIDER=mock
+export SAST_LLM_ENABLED=1
+export SAST_LLM_PROVIDER=ollama
+export SAST_LLM_BASE_URL=http://127.0.0.1:11434
+export SAST_LLM_MODEL=deepseek-coder:6.7b
 uvicorn llm_gateway.app.main:app --host 127.0.0.1 --port 8081
 ```
 
@@ -152,27 +178,34 @@ curl http://127.0.0.1:8081/schema/response
 
 What is mocked vs provider-backed:
 
-- default behavior is `mock`; this is what the test suite exercises
-- `openai_responses` is the supported hosted provider adapter in this milestone
-- the deterministic scanner is not yet auto-calling the gateway; enablement is currently at the sidecar boundary only
+- default behavior is local `ollama`; no paid API key is required for that path
+- `mock` remains available for tests and dry-run gateway validation
+- `openai_responses` remains available as an optional hosted adapter
+- the scanner stays deterministic-first and only calls the gateway when you pass `--llm-review`
+- only findings already classified as `needs_review`, `likely_issue`, or `likely_safe` are sent to the gateway
+- `confirmed_issue` and `safe_suppressed` findings are never sent
 
 Required environment variables and switches:
 
 - `SAST_LLM_ENABLED=1` enables provider calls inside the gateway
 - `SAST_LLM_ENABLED=0` disables provider calls and forces deterministic fallback
-- `SAST_LLM_PROVIDER=mock|openai_responses`
+- `SAST_LLM_PROVIDER=ollama|mock|openai_responses`
+- `SAST_LLM_BASE_URL=http://127.0.0.1:11434` for local Ollama
+- `SAST_LLM_MODEL=deepseek-coder:6.7b` for the local DeepSeek model
 - `OPENAI_API_KEY=...` is required only for `openai_responses`
-- `SAST_LLM_MODEL=gpt-5-mini`
-- `SAST_LLM_BASE_URL=https://api.openai.com`
 - `SAST_LLM_TIMEOUT=20`
 - `SAST_LLM_MAX_RETRIES=2`
+- `SAST_LLM_GATEWAY_URL=http://127.0.0.1:8081` configures the C++ scanner-to-gateway URL
+- `SAST_LLM_GATEWAY_TIMEOUT=25` configures the C++ scanner-to-gateway timeout in seconds
 
-Enable mock review locally:
+Enable local Ollama + DeepSeek review:
 
 ```bash
 source .venv/bin/activate
 export SAST_LLM_ENABLED=1
-export SAST_LLM_PROVIDER=mock
+export SAST_LLM_PROVIDER=ollama
+export SAST_LLM_BASE_URL=http://127.0.0.1:11434
+export SAST_LLM_MODEL=deepseek-coder:6.7b
 uvicorn llm_gateway.app.main:app --host 127.0.0.1 --port 8081
 ```
 
@@ -181,6 +214,15 @@ Disable all LLM review but keep the gateway running:
 ```bash
 source .venv/bin/activate
 export SAST_LLM_ENABLED=0
+export SAST_LLM_PROVIDER=mock
+uvicorn llm_gateway.app.main:app --host 127.0.0.1 --port 8081
+```
+
+Enable mock review locally for tests or schema debugging:
+
+```bash
+source .venv/bin/activate
+export SAST_LLM_ENABLED=1
 export SAST_LLM_PROVIDER=mock
 uvicorn llm_gateway.app.main:app --host 127.0.0.1 --port 8081
 ```
@@ -296,7 +338,7 @@ Example JSON shape:
 CLI:
 
 ```text
-sast-cli scan --repo <path> [--compdb <path>|--auto-compdb] [--changed-files <file>] [--candidates-only] [--jobs N] [--format json|sarif|text] [--out <file>]
+sast-cli scan --repo <path> [--compdb <path>|--auto-compdb] [--changed-files <file>] [--candidates-only] [--llm-review] [--llm-gateway <url>] [--jobs N] [--format json|sarif|text] [--out <file>]
 ```
 
 Implemented rule families:
@@ -341,6 +383,7 @@ Validated finding JSON fields:
 - `validation.matched_positive_conditions`
 - `validation.matched_negative_conditions`
 - `validation.matched_ambiguous_conditions`
+- `validation.llm_review` when `--llm-review` is enabled and the gateway returns a review or deterministic fallback
 
 Example on the included case corpus:
 
@@ -348,11 +391,29 @@ Example on the included case corpus:
 ./build/sast-cli scan --repo tests/cases/demo --format json
 ```
 
+Local Ollama-backed review example:
+
+```bash
+source .venv/bin/activate
+export SAST_LLM_ENABLED=1
+export SAST_LLM_PROVIDER=ollama
+export SAST_LLM_BASE_URL=http://127.0.0.1:11434
+export SAST_LLM_MODEL=deepseek-coder:6.7b
+uvicorn llm_gateway.app.main:app --host 127.0.0.1 --port 8081
+
+./build/sast-cli scan \
+  --repo tests/cases/demo \
+  --format text \
+  --llm-review \
+  --llm-gateway http://127.0.0.1:8081
+```
+
 The output is explicitly marked with `"candidate_only": false` and includes:
 
 - the original candidate evidence
 - the final deterministic judgment
 - why the finding was considered safe, ambiguous, or escalated
+- optional `validation.llm_review` enrichment for eligible findings only
 
 Stable schemas:
 
@@ -367,6 +428,12 @@ Format examples:
 ./build/sast-cli scan --repo tests/cases/demo --format sarif --out build/demo.sarif
 
 ./build/sast-cli scan --repo tests/cases/demo --format text
+
+./build/sast-cli scan \
+  --repo tests/cases/demo \
+  --format json \
+  --llm-review \
+  --llm-gateway http://127.0.0.1:8081
 ```
 
 Investor demo output:
@@ -412,7 +479,9 @@ Optional: measure gateway round-trip latency for one eligible ambiguous or incom
 ```bash
 source .venv/bin/activate
 export SAST_LLM_ENABLED=1
-export SAST_LLM_PROVIDER=mock
+export SAST_LLM_PROVIDER=ollama
+export SAST_LLM_BASE_URL=http://127.0.0.1:11434
+export SAST_LLM_MODEL=deepseek-coder:6.7b
 uvicorn llm_gateway.app.main:app --host 127.0.0.1 --port 8081
 
 python3 benchmarks/run_smoke.py \
@@ -452,7 +521,7 @@ Notes:
 
 - `memory_rss_bytes` is populated on Linux through `/proc/self/status`
 - `cache_hit_rate` is present as a stable field, but the active pipeline does not yet persist summary cache entries, so it remains `0.0`
-- `llm_latency_ms` remains `null` in core scan output until engine-side LLM invocation is wired; the smoke harness can still measure gateway latency separately when `--gateway-url` is provided
+- `llm_latency_ms` is populated when `--llm-review` is enabled on the scanner and at least one eligible finding is reviewed
 
 ## Current Limitations
 
@@ -460,8 +529,10 @@ Notes:
 - validator reasoning is intentionally local and heuristic; it does not yet prove complex interprocedural invariants
 - wrapper and sanitizer semantics are only as strong as the configured names and the local trace evidence
 - changed-files-only filtering is implemented, but persistent summary caching remains a later milestone
-- the C++ scanner does not yet automatically call the gateway
-- the hosted adapter is verified through mocked HTTP responses, not live network calls
+- the scanner only enriches findings through the gateway when `--llm-review` is explicitly enabled
+- deterministic judgments remain the source of truth; LLM output is advisory metadata only
+- the hosted OpenAI-compatible adapter is verified through mocked HTTP responses, not live paid API calls
+- the local Ollama path is schema-constrained, but model quality still depends on the installed local model
 
 ## Current Layout
 
@@ -494,4 +565,6 @@ The active build verifies:
 - benchmark fixtures cover vulnerable, safe-looking, ambiguous, and cross-function propagation scenarios
 - regression suites lock in fixed false positives and false negatives
 - the gateway exposes strict request/response schemas plus retry and fallback behavior for ambiguous or high-value findings
+- local Ollama + DeepSeek review works through `llm_gateway`
+- `sast-cli scan --llm-review` enriches eligible findings without changing deterministic decisions
 # SAST-AI-C-TOOL

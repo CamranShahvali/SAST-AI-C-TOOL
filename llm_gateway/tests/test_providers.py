@@ -4,7 +4,7 @@ import json
 import httpx
 import pytest
 
-from llm_gateway.app.providers import OpenAIResponsesProvider, ProviderError
+from llm_gateway.app.providers import OllamaProvider, OpenAIResponsesProvider, ProviderError
 from llm_gateway.app.schemas import ReviewRequest
 from llm_gateway.app.settings import GatewaySettings
 
@@ -40,6 +40,18 @@ def settings() -> GatewaySettings:
         base_url="https://api.openai.com",
         api_key="test-key",
         model="gpt-5-mini",
+        timeout_seconds=1.0,
+        max_retries=2,
+    )
+
+
+def ollama_settings() -> GatewaySettings:
+    return GatewaySettings(
+        enabled=True,
+        provider="ollama",
+        base_url="http://127.0.0.1:11434",
+        api_key="",
+        model="deepseek-coder:6.7b",
         timeout_seconds=1.0,
         max_retries=2,
     )
@@ -118,6 +130,91 @@ def test_openai_provider_rejects_malformed_output() -> None:
         return httpx.Response(200, json={"output_text": "{not-json"})
 
     provider = OpenAIResponsesProvider(settings(), transport=make_transport(handler))
+
+    with pytest.raises(ProviderError, match="invalid structured JSON"):
+        asyncio.run(provider.review(sample_request()))
+
+
+def test_ollama_provider_accepts_valid_structured_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/chat"
+        body = json.loads(request.content.decode("utf-8"))
+        assert body["model"] == "deepseek-coder:6.7b"
+        assert body["stream"] is False
+        assert body["format"]["type"] == "object"
+        payload = {
+            "message": {
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "judgment": "needs_review",
+                        "confidence": 0.67,
+                        "cwe": "CWE-120",
+                        "exploitability": "medium",
+                        "reasoning_summary": "The size expression remains unresolved.",
+                        "remediation": "Bind the copy length to sizeof(destination).",
+                        "safe_reasoning": None,
+                        "provider_status": "ok",
+                    }
+                ),
+            }
+        }
+        return httpx.Response(200, json=payload)
+
+    provider = OllamaProvider(ollama_settings(), transport=make_transport(handler))
+    response = asyncio.run(provider.review(sample_request()))
+
+    assert response.judgment == "needs_review"
+    assert response.provider_status == "ok"
+
+
+def test_ollama_provider_reports_timeout() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    provider = OllamaProvider(ollama_settings(), transport=make_transport(handler))
+
+    with pytest.raises(ProviderError, match="provider request failed"):
+        asyncio.run(provider.review(sample_request()))
+
+
+def test_ollama_provider_rejects_invalid_schema_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "message": {
+                    "role": "assistant",
+                    "content": json.dumps(
+                        {
+                            "judgment": "bogus",
+                            "confidence": 0.67,
+                            "cwe": "CWE-120",
+                            "exploitability": "medium",
+                            "reasoning_summary": "bad schema",
+                            "remediation": None,
+                            "safe_reasoning": None,
+                            "provider_status": "ok",
+                        }
+                    ),
+                }
+            },
+        )
+
+    provider = OllamaProvider(ollama_settings(), transport=make_transport(handler))
+
+    with pytest.raises(ProviderError, match="invalid structured JSON"):
+        asyncio.run(provider.review(sample_request()))
+
+
+def test_ollama_provider_rejects_malformed_output() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": "{not-json"}},
+        )
+
+    provider = OllamaProvider(ollama_settings(), transport=make_transport(handler))
 
     with pytest.raises(ProviderError, match="invalid structured JSON"):
         asyncio.run(provider.review(sample_request()))

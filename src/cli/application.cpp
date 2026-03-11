@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <cstdlib>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -26,9 +27,12 @@ struct ParsedFactsArgs {
   std::optional<std::filesystem::path> changed_files;
   bool auto_compdb = false;
   bool candidates_only = false;
+  bool llm_review = false;
   std::size_t jobs = 1;
   std::string format = "json";
   std::optional<std::filesystem::path> out;
+  std::string llm_gateway_url = "http://127.0.0.1:8081";
+  double llm_timeout_seconds = 25.0;
 };
 
 struct ParsedDemoArgs {
@@ -53,8 +57,17 @@ std::string require_value(const std::vector<std::string>& args, const std::size_
   return args[index + 1];
 }
 
+std::string env_or_default(const char* name, const std::string_view fallback) {
+  if (const auto* value = std::getenv(name)) {
+    return value;
+  }
+  return std::string(fallback);
+}
+
 ParsedFactsArgs parse_facts_args(const std::vector<std::string>& args) {
   ParsedFactsArgs parsed;
+  parsed.llm_gateway_url = env_or_default("SAST_LLM_GATEWAY_URL", parsed.llm_gateway_url);
+  parsed.llm_timeout_seconds = std::stod(env_or_default("SAST_LLM_GATEWAY_TIMEOUT", "25"));
   for (std::size_t index = 0; index < args.size(); ++index) {
     const auto& arg = args[index];
     if (arg == "--repo") {
@@ -70,6 +83,11 @@ ParsedFactsArgs parse_facts_args(const std::vector<std::string>& args) {
       parsed.auto_compdb = true;
     } else if (arg == "--candidates-only") {
       parsed.candidates_only = true;
+    } else if (arg == "--llm-review") {
+      parsed.llm_review = true;
+    } else if (arg == "--llm-gateway") {
+      parsed.llm_gateway_url = require_value(args, index);
+      ++index;
     } else if (arg == "--jobs") {
       parsed.jobs = static_cast<std::size_t>(std::stoul(require_value(args, index)));
       ++index;
@@ -232,7 +250,9 @@ int Application::run_scan(const std::vector<std::string>& args) const {
     .explicit_compdb = parsed.explicit_compdb,
     .changed_files = parsed.changed_files,
     .jobs = parsed.jobs,
-    .llm_review = false,
+    .llm_review = parsed.llm_review,
+    .llm_gateway_url = parsed.llm_gateway_url,
+    .llm_timeout_seconds = parsed.llm_timeout_seconds,
   });
 
   if (parsed.candidates_only) {

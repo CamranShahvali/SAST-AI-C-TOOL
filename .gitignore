@@ -38,6 +38,9 @@ Thumbs.db
 # Generated outputs
 *.json
 *.sarif
+!CMakePresets.json
+!.vscode/settings.json
+!.vscode/extensions.json
 
 # Environment variables
 .env

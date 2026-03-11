@@ -22,6 +22,26 @@ class BaseProvider(abc.ABC):
         raise NotImplementedError
 
 
+def _strict_prompt(request: ReviewRequest) -> str:
+    request_json = request.model_dump(mode="json")
+    return (
+        "You are reviewing a structured static-analysis finding.\n"
+        "Only use the compact context provided below.\n"
+        "Do not assume access to the whole file or repository.\n"
+        "Do not invent missing code or missing control flow.\n"
+        "Return strict JSON only.\n"
+        f"Finding context:\n{json.dumps(request_json, indent=2)}"
+    )
+
+
+def _validate_review_data(data: dict, provider_status: str | None = None) -> ReviewResponse:
+    validated = ReviewResponse.model_validate(data)
+    if provider_status is not None:
+        validated = validated.model_copy(update={"provider_status": provider_status})
+    validate_review_response(validated)
+    return validated
+
+
 class MockProvider(BaseProvider):
     _cwe_by_rule = {
         "command_injection.system": "CWE-78",
@@ -73,17 +93,9 @@ class OpenAIResponsesProvider(BaseProvider):
 
     def _response_payload(self, request: ReviewRequest) -> dict:
         validate_review_request(request)
-        request_json = request.model_dump(mode="json")
-        prompt = (
-            "You are reviewing a structured static-analysis finding.\n"
-            "Only use the compact context provided below.\n"
-            "Do not assume access to the whole file or repository.\n"
-            "Return strict JSON only.\n"
-            f"Finding context:\n{json.dumps(request_json, indent=2)}"
-        )
         return {
             "model": self._settings.model,
-            "input": prompt,
+            "input": _strict_prompt(request),
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -128,9 +140,76 @@ class OpenAIResponsesProvider(BaseProvider):
 
         try:
             data = self._extract_response_json(response.json())
-            validated = ReviewResponse.model_validate(data)
-            validate_review_response(validated)
-            return validated
+            return _validate_review_data(data, provider_status="ok")
+        except (
+            json.JSONDecodeError,
+            JsonSchemaValidationError,
+            PydanticValidationError,
+            ValueError,
+        ) as exc:
+            raise ProviderError(f"provider returned invalid structured JSON: {exc}") from exc
+
+
+class OllamaProvider(BaseProvider):
+    def __init__(
+        self,
+        settings: GatewaySettings,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._settings = settings
+        self._transport = transport
+
+    def _response_payload(self, request: ReviewRequest) -> dict:
+        validate_review_request(request)
+        return {
+            "model": self._settings.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You review compact static-analysis findings. "
+                        "You must return strict JSON that matches the provided schema."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": _strict_prompt(request),
+                },
+            ],
+            "stream": False,
+            "format": ReviewResponse.model_json_schema(),
+            "options": {
+                "temperature": 0,
+            },
+        }
+
+    def _extract_response_json(self, payload: dict) -> dict:
+        if (
+            isinstance(payload.get("message"), dict) and
+            isinstance(payload["message"].get("content"), str)
+        ):
+            return json.loads(payload["message"]["content"])
+        raise ProviderError("provider response did not contain structured JSON")
+
+    async def review(self, request: ReviewRequest) -> ReviewResponse:
+        validate_review_request(request)
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._settings.timeout_seconds,
+                transport=self._transport,
+            ) as client:
+                response = await client.post(
+                    f"{self._settings.base_url.rstrip('/')}/api/chat",
+                    json=self._response_payload(request),
+                )
+                response.raise_for_status()
+        except (httpx.TimeoutException, httpx.HTTPError) as exc:
+            raise ProviderError(f"provider request failed: {exc}") from exc
+
+        try:
+            data = self._extract_response_json(response.json())
+            return _validate_review_data(data, provider_status="ok")
         except (
             json.JSONDecodeError,
             JsonSchemaValidationError,
@@ -143,6 +222,8 @@ class OpenAIResponsesProvider(BaseProvider):
 def create_provider(settings: GatewaySettings) -> BaseProvider:
     if settings.provider == "mock":
         return MockProvider(settings)
+    if settings.provider == "ollama":
+        return OllamaProvider(settings)
     if settings.provider == "openai_responses":
         return OpenAIResponsesProvider(settings)
     raise ValueError(f"unsupported llm provider: {settings.provider}")

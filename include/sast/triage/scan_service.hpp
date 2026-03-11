@@ -2,12 +2,17 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 
 #include <nlohmann/json.hpp>
 
 #include "sast/ir/facts.hpp"
+
+namespace sast::llm_gateway {
+class ReviewTransport;
+}
 
 namespace sast::triage {
 
@@ -17,6 +22,9 @@ struct ScanOptions {
   std::optional<std::filesystem::path> changed_files;
   std::size_t jobs = 1;
   bool llm_review = false;
+  std::string llm_gateway_url = "http://127.0.0.1:8081";
+  double llm_timeout_seconds = 25.0;
+  std::shared_ptr<sast::llm_gateway::ReviewTransport> llm_transport;
 };
 
 struct ScanMetrics {

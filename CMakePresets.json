@@ -1,0 +1,40 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "clang18-debug",
+      "displayName": "Clang 18 Debug",
+      "description": "Project-local Clang 18 + Ninja configure preset for CLI and VS Code CMake Tools.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "/usr/bin/clang-18",
+        "CMAKE_CXX_COMPILER": "/usr/bin/clang++-18",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "LLVM_DIR": "/usr/lib/llvm-18/lib/cmake/llvm",
+        "Clang_DIR": "/usr/lib/llvm-18/lib/cmake/clang"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "clang18-debug",
+      "configurePreset": "clang18-debug"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "clang18-debug",
+      "configurePreset": "clang18-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

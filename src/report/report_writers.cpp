@@ -161,6 +161,9 @@ std::string ReportWriters::to_sarif(const ir::ValidatedScanResult& result) {
         {"ambiguous_conditions", finding.validation.matched_ambiguous_conditions},
       }},
     });
+    if (finding.validation.llm_review) {
+      sarif_results.back()["properties"]["llm_review"] = *finding.validation.llm_review;
+    }
   }
 
   const nlohmann::json sarif{
@@ -221,6 +224,18 @@ std::string ReportWriters::to_text(const ir::ValidatedScanResult& result) {
     }
     if (!finding.validation.suppressions.empty()) {
       output << "  suppressions: " << joined_or_empty(finding.validation.suppressions) << '\n';
+    }
+    if (finding.validation.llm_review) {
+      output << "  llm_review: provider_status=" << finding.validation.llm_review->provider_status
+             << " judgment=" << ir::to_string(finding.validation.llm_review->judgment)
+             << " confidence=" << finding.validation.llm_review->confidence << '\n';
+      output << "  llm_reasoning: " << finding.validation.llm_review->reasoning_summary << '\n';
+      if (finding.validation.llm_review->safe_reasoning) {
+        output << "  llm_safe_reasoning: " << *finding.validation.llm_review->safe_reasoning << '\n';
+      }
+      if (finding.validation.llm_review->remediation) {
+        output << "  llm_remediation: " << *finding.validation.llm_review->remediation << '\n';
+      }
     }
     output << '\n';
   }
