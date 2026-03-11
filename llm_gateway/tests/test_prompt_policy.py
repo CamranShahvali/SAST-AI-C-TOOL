@@ -112,6 +112,47 @@ def test_needs_review_remediation_stays_concrete_and_cautious() -> None:
     assert "review the trace" not in normalized.remediation.lower()
 
 
+def test_needs_review_remediation_replaces_confirmed_language() -> None:
+    request = sample_request()
+    response = ReviewResponse(
+        judgment="needs_review",
+        confidence=0.59,
+        cwe="CWE-120",
+        exploitability="medium",
+        reasoning_summary="Needs more analysis.",
+        remediation="The code snippet is vulnerable to buffer overflow.",
+        safe_reasoning=None,
+        provider_status="ok",
+    )
+
+    normalized = _normalize_review_response(request, response, provider_status="ok")
+
+    assert normalized.remediation is not None
+    assert "vulnerable" not in normalized.remediation.lower()
+    assert "buffer overflow" not in normalized.remediation.lower()
+    assert "sizeof(destination)" in normalized.remediation.lower()
+
+
+def test_needs_review_unknown_remediation_uses_sink_specific_fallback() -> None:
+    request = sample_request()
+    response = ReviewResponse(
+        judgment="needs_review",
+        confidence=0.55,
+        cwe="CWE-120",
+        exploitability="unknown",
+        reasoning_summary="Needs review.",
+        remediation="unknown",
+        safe_reasoning=None,
+        provider_status="ok",
+    )
+
+    normalized = _normalize_review_response(request, response, provider_status="ok")
+
+    assert normalized.remediation is not None
+    assert normalized.remediation.lower() != "unknown"
+    assert "sizeof(destination)" in normalized.remediation.lower()
+
+
 def test_prompt_guidance_keeps_likely_issue_below_confirmed() -> None:
     prompt = _strict_prompt(
         sample_request_for(
@@ -168,6 +209,37 @@ def test_likely_issue_remediation_stays_sink_specific() -> None:
     assert "allowlist" in normalized.remediation.lower()
 
 
+def test_likely_issue_runtime_wording_stays_consistent() -> None:
+    request = sample_request_for(
+        "likely_issue",
+        "path_traversal.file_open",
+        'fopen(normalize_path(argv[1]), "r")',
+        "ambiguous: path validation wrapper is not modeled | positive: user-controlled path reaches file sink",
+    )
+    response = ReviewResponse(
+        judgment="likely_issue",
+        confidence=0.92,
+        cwe="CWE-22",
+        exploitability="medium",
+        reasoning_summary="This path looks dangerous.",
+        remediation="review the trace",
+        safe_reasoning="looks safe enough",
+        provider_status="ok",
+    )
+
+    normalized = _normalize_review_response(request, response, provider_status="ok")
+
+    assert normalized.judgment == "likely_issue"
+    assert normalized.confidence == request.confidence
+    assert "elevated risk" in normalized.reasoning_summary.lower()
+    assert "proof is still incomplete" in normalized.reasoning_summary.lower()
+    assert "path validation wrapper is not modeled" in normalized.reasoning_summary.lower()
+    assert normalized.safe_reasoning is None
+    assert normalized.remediation is not None
+    assert "fixed trusted root" in normalized.remediation.lower()
+    assert "review the trace" not in normalized.remediation.lower()
+
+
 def test_likely_safe_remediation_stays_cautious_and_concrete() -> None:
     request = sample_request_for(
         "likely_safe",
@@ -190,6 +262,37 @@ def test_likely_safe_remediation_stays_cautious_and_concrete() -> None:
 
     assert normalized.judgment == "likely_safe"
     assert normalized.remediation is not None
-    assert "provably safe" in normalized.remediation.lower()
+    assert "stronger safety proof" in normalized.remediation.lower()
     assert "fixed trusted root" in normalized.remediation.lower()
     assert "no additional remediation required" not in normalized.remediation.lower()
+
+
+def test_likely_safe_runtime_wording_is_clear_and_not_alarmist() -> None:
+    request = sample_request_for(
+        "likely_safe",
+        "path_traversal.file_open",
+        'fopen(path.c_str(), "r")',
+        "safe: path allowlist predicate constrains user input | ambiguous: path allowlist exists but root confinement proof is incomplete",
+    )
+    response = ReviewResponse(
+        judgment="likely_safe",
+        confidence=0.91,
+        cwe="CWE-22",
+        exploitability="high",
+        reasoning_summary="This might still be exploitable.",
+        remediation="sanitize input",
+        safe_reasoning="The path is probably safe.",
+        provider_status="ok",
+    )
+
+    normalized = _normalize_review_response(request, response, provider_status="ok")
+
+    assert normalized.judgment == "likely_safe"
+    assert normalized.confidence == request.confidence
+    assert "safety signal near the sink" in normalized.reasoning_summary.lower()
+    assert "proof is still incomplete" in normalized.reasoning_summary.lower()
+    assert "remaining gap" in normalized.reasoning_summary.lower()
+    assert "vulnerab" not in normalized.reasoning_summary.lower()
+    assert "exploit" not in normalized.reasoning_summary.lower()
+    assert normalized.safe_reasoning is not None
+    assert "path allowlist predicate constrains user input" in normalized.safe_reasoning.lower()
