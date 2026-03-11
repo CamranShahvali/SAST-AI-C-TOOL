@@ -149,6 +149,13 @@ Hard boundaries enforced by the schema:
 - at most two code windows
 - each code window is capped to 12 lines
 
+`needs_review` policy:
+
+- the gateway keeps `needs_review` explicitly uncertain
+- normalized `reasoning_summary` avoids confirmed-vulnerability wording and explains that safety could not be proven and still requires review
+- `safe_reasoning` is omitted for `needs_review` unless real safety evidence exists
+- remediation stays concrete and sink-specific, but remains cautious
+
 Python setup:
 
 ```bash

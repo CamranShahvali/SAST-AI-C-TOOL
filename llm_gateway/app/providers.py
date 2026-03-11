@@ -22,6 +22,27 @@ class BaseProvider(abc.ABC):
         raise NotImplementedError
 
 
+def _truncate(text: str, limit: int = 1200) -> str:
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[:limit]
+    return text[: limit - 3] + "..."
+
+
+def _judgment_guidance(request: ReviewRequest) -> str:
+    if request.current_judgment == "needs_review":
+        return (
+            "The deterministic judgment is needs_review.\n"
+            "Stay explicitly uncertain.\n"
+            "Do not describe this as a confirmed or likely vulnerability.\n"
+            "Prefer wording such as 'could not be proven safe', 'requires review', or 'safety of the bound is not established'.\n"
+            "Avoid phrases such as 'buffer overflow vulnerability', 'vulnerable', or 'exploit is possible'.\n"
+            "Keep the returned judgment as needs_review.\n"
+        )
+    return "Do not overstate certainty beyond the deterministic judgment.\n"
+
+
 def _strict_prompt(request: ReviewRequest) -> str:
     request_json = request.model_dump(mode="json")
     return (
@@ -29,17 +50,94 @@ def _strict_prompt(request: ReviewRequest) -> str:
         "Only use the compact context provided below.\n"
         "Do not assume access to the whole file or repository.\n"
         "Do not invent missing code or missing control flow.\n"
+        f"{_judgment_guidance(request)}"
+        "Reasoning policy:\n"
+        "- Do not contradict the deterministic judgment.\n"
+        "- Keep uncertainty explicit when proof is incomplete.\n"
+        "- Return safe_reasoning only when the compact context shows real safety evidence.\n"
+        "Remediation policy:\n"
+        "- Keep remediation concrete and sink-specific.\n"
+        "- Avoid generic wording like 'sanitize input' or 'review the trace'.\n"
         "Return strict JSON only.\n"
         f"Finding context:\n{json.dumps(request_json, indent=2)}"
     )
 
 
-def _validate_review_data(data: dict, provider_status: str | None = None) -> ReviewResponse:
+def _is_generic_remediation(remediation: str | None) -> bool:
+    if remediation is None:
+        return True
+    normalized = remediation.lower()
+    return (
+        "sanitize input" in normalized or
+        "review the trace" in normalized or
+        "review the deterministic trace" in normalized or
+        "safer api" in normalized
+    )
+
+
+def _concrete_remediation(request: ReviewRequest) -> str:
+    sink = request.sink_summary.lower()
+    if request.rule_id == "command_injection.system":
+        return "Replace shell-style command construction with execve or spawn using a fixed argv vector, or apply a strict allowlist immediately before the command sink."
+    if request.rule_id == "path_traversal.file_open":
+        return "Canonicalize the path under a fixed root and reject any escape from that root before passing the result to the file-open sink."
+    if request.rule_id == "dangerous_string.unbounded_copy":
+        if "memcpy" in sink or "memmove" in sink:
+            return "Tie the copy length to the destination extent, for example sizeof(destination), and reject or clamp larger runtime lengths before the memcpy-style sink."
+        return "Use a bounded write API and tie the bound to the destination extent instead of an unchecked runtime length."
+    return "Apply a concrete guard directly at the sink and keep the deterministic evidence explicit."
+
+
+def _needs_review_reasoning(request: ReviewRequest) -> str:
+    guard = request.guard_summary.strip().rstrip(".")
+    parts = [
+        "Deterministic judgment remains needs_review because the compact context could not be proven safe and requires review."
+    ]
+    if "bound" in guard.lower():
+        parts.append("Safety of the bound is not established.")
+    elif guard:
+        parts.append(f"The unresolved point is: {guard}.")
+    return " ".join(parts)
+
+
+def _normalize_review_response(
+    request: ReviewRequest,
+    response: ReviewResponse,
+    provider_status: str | None = None,
+) -> ReviewResponse:
+    if request.current_judgment != "needs_review":
+        normalized = response
+        if provider_status is not None:
+            normalized = normalized.model_copy(update={"provider_status": provider_status})
+        validate_review_response(normalized)
+        return normalized
+
+    remediation = response.remediation
+    if _is_generic_remediation(remediation):
+        remediation = _concrete_remediation(request)
+
+    normalized = response.model_copy(
+        update={
+            "judgment": "needs_review",
+            "confidence": min(response.confidence, request.confidence),
+            "exploitability": "unknown",
+            "reasoning_summary": _truncate(_needs_review_reasoning(request)),
+            "remediation": _truncate(remediation) if remediation is not None else None,
+            "safe_reasoning": None,
+            "provider_status": provider_status or response.provider_status,
+        }
+    )
+    validate_review_response(normalized)
+    return normalized
+
+
+def _validate_review_data(
+    request: ReviewRequest,
+    data: dict,
+    provider_status: str | None = None,
+) -> ReviewResponse:
     validated = ReviewResponse.model_validate(data)
-    if provider_status is not None:
-        validated = validated.model_copy(update={"provider_status": provider_status})
-    validate_review_response(validated)
-    return validated
+    return _normalize_review_response(request, validated, provider_status=provider_status)
 
 
 class MockProvider(BaseProvider):
@@ -72,14 +170,13 @@ class MockProvider(BaseProvider):
                 confidence=max(request.confidence, 0.74),
                 cwe=self._cwe_by_rule.get(request.rule_id),
                 exploitability="medium" if request.provisional_severity in {"high", "critical"} else "low",
-                reasoning_summary="Mock provider reviewed the compact structured finding context.",
-                remediation="Review the deterministic trace and replace risky sinks with constrained APIs or fixed arguments.",
+                reasoning_summary="Mock provider reviewed the compact structured finding context conservatively.",
+                remediation=_concrete_remediation(request),
                 safe_reasoning=None,
                 provider_status="mock",
             )
 
-        validate_review_response(response)
-        return response
+        return _normalize_review_response(request, response, provider_status="mock")
 
 
 class OpenAIResponsesProvider(BaseProvider):
@@ -140,7 +237,7 @@ class OpenAIResponsesProvider(BaseProvider):
 
         try:
             data = self._extract_response_json(response.json())
-            return _validate_review_data(data, provider_status="ok")
+            return _validate_review_data(request, data, provider_status="ok")
         except (
             json.JSONDecodeError,
             JsonSchemaValidationError,
@@ -209,7 +306,7 @@ class OllamaProvider(BaseProvider):
 
         try:
             data = self._extract_response_json(response.json())
-            return _validate_review_data(data, provider_status="ok")
+            return _validate_review_data(request, data, provider_status="ok")
         except (
             json.JSONDecodeError,
             JsonSchemaValidationError,

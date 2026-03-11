@@ -87,7 +87,9 @@ def test_openai_provider_accepts_valid_structured_response() -> None:
     provider = OpenAIResponsesProvider(settings(), transport=make_transport(handler))
     response = asyncio.run(provider.review(sample_request()))
 
-    assert response.judgment == "likely_issue"
+    assert response.judgment == "needs_review"
+    assert response.safe_reasoning is None
+    assert "could not be proven safe" in response.reasoning_summary
     assert response.provider_status == "ok"
 
 
@@ -165,6 +167,8 @@ def test_ollama_provider_accepts_valid_structured_response() -> None:
     response = asyncio.run(provider.review(sample_request()))
 
     assert response.judgment == "needs_review"
+    assert response.safe_reasoning is None
+    assert "could not be proven safe" in response.reasoning_summary
     assert response.provider_status == "ok"
 
 
