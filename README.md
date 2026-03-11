@@ -494,3 +494,4 @@ The active build verifies:
 - benchmark fixtures cover vulnerable, safe-looking, ambiguous, and cross-function propagation scenarios
 - regression suites lock in fixed false positives and false negatives
 - the gateway exposes strict request/response schemas plus retry and fallback behavior for ambiguous or high-value findings
+# SAST-AI-C-TOOL
