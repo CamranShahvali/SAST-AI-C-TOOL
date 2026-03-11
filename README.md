@@ -1,40 +1,151 @@
 # ai_sast
 
-`ai_sast` is a C++-first AI-assisted SAST project. The current milestone implements the C++ frontend, candidate detection, and a deterministic validator/decision layer:
+Deterministic C++ static analysis with optional AI-assisted review for ambiguous findings.
 
-- compile database discovery via `compile_commands.json`
-- Clang LibTooling parsing
-- minimal normalized IR for extracted facts
-- config-backed source/sink registry loading
-- candidate generation for initial rule families
-- validator-backed final classification
-- JSON output for facts and validated findings
+`ai_sast` is a C++-first SAST MVP built around a simple rule: matching a risky pattern is not enough. The engine generates candidates, validates safety barriers, and only then decides whether a finding is confirmed, likely, ambiguous, or safe.
 
-Important: a source or sink match is never treated as a vulnerability by itself. The detection philosophy is:
+![CLI Demo](docs/demo.gif)
+
+**At a glance**
+
+- Deterministic scanner is the source of truth
+- Clang LibTooling frontend with C++20 build support
+- JSON, SARIF, and human-readable text output
+- Explicit outcomes: `confirmed_issue`, `likely_issue`, `needs_review`, `likely_safe`, `safe_suppressed`
+- Optional local AI review through `llm_gateway` for ambiguous or high-value findings only
+- Current focus: command execution misuse, path traversal, and dangerous buffer/string handling
+
+## Overview
+
+`ai_sast` is designed for teams that want a static analysis tool to do more than pattern match sinks. The core engine extracts facts from C++ source with Clang, creates candidate findings, validates them against safety evidence, and emits a deterministic result. An optional LLM sidecar can add concise reasoning and remediation for findings that are still uncertain after deterministic validation.
+
+**Why this is different**
+
+- The deterministic engine owns the final result. The LLM does not replace the scanner.
+- Safe outcomes are first-class. The engine is allowed to say “this appears safe” or “this was explicitly dismissed.”
+- Findings are structured around proof quality, not just sink matches.
+- The current architecture is CLI-first, testable, and automation-friendly.
+
+This repository is already usable as a working MVP. It is not a full whole-program verifier, and it does not claim perfect precision. It is a practical, deterministic-first security tool with a narrow, explicit AI integration boundary.
+
+## Demo
+
+The built-in demo walks through all five deterministic outcomes on curated examples:
+
+- `confirmed_issue`
+- `likely_issue`
+- `needs_review`
+- `likely_safe`
+- `safe_suppressed`
+
+Run it:
+
+```bash
+cmake --build --preset clang18-debug
+./build/sast-cli demo
+```
+
+JSON demo output:
+
+```bash
+./build/sast-cli demo --format json --out build/demo.json
+jq '.' build/demo.json
+```
+
+Optional advisory LLM enrichment for eligible demo cases:
+
+```bash
+./build/sast-cli demo \
+  --llm-review \
+  --llm-gateway http://127.0.0.1:8081
+```
+
+The demo is intentionally small and curated. It shows how the engine behaves on representative cases. It is not a claim of complete proof across arbitrary repositories.
+
+## Key Features
+
+- Deterministic C++ scanning with Clang LibTooling
+- Candidate -> validate -> decide workflow
+- Config-backed sources, sinks, sanitizers, wrappers, and suppressions
+- Compile database discovery plus synthetic fallback for standalone source trees
+- JSON, SARIF 2.1.0, and text reporting
+- Changed-files-only scan mode
+- Regression fixtures and benchmark smoke harness
+- Optional local LLM review through FastAPI + Ollama
+- Structured schema validation and fallback behavior for LLM responses
+
+## Detection Pipeline
+
+The active scan path is:
+
+1. CLI loads the repo path and scan options.
+2. The engine discovers `compile_commands.json` or falls back to synthetic compile commands.
+3. Clang LibTooling parses translation units and extracts facts:
+   - functions
+   - call sites
+   - variable references
+   - local variable definitions
+   - source locations
+4. Candidate detection matches configured sinks and traces simple source-to-sink context.
+5. The validator tries to prove safety barriers or identify incomplete proof.
+6. The decision engine assigns one of:
+   - `confirmed_issue`
+   - `likely_issue`
+   - `needs_review`
+   - `likely_safe`
+   - `safe_suppressed`
+7. Report writers render the result as JSON, SARIF, or text.
+8. If `--llm-review` is enabled, only eligible findings are sent to the gateway for optional advisory enrichment.
+
+Core philosophy:
 
 ```text
 candidate -> validate -> prove vulnerable or dismiss
 ```
 
-`scan` emits validated findings. Each finding still preserves the original candidate evidence, but the final output always includes a deterministic judgment and the reasoning that made it safe, ambiguous, or escalated.
+## Supported Rule Families
 
-The current milestone also adds:
+Current deterministic rule coverage:
 
-- a benchmark harness for vulnerable, safe-looking, ambiguous, and cross-function fixtures
-- regression suites for previously fixed false positives and false negatives
-- scan metrics for parse time, candidate generation time, validation time, full scan time, skip rate, RSS on Linux, and optional LLM review latency
-- changed-files-only scan support for CI and incremental smoke runs
+- Command execution misuse
+  - `system`
+  - `popen`
+  - `exec*`
+  - `posix_spawnp`
+- Path traversal / unsafe file access
+  - `fopen`
+  - `open`
+  - common file-open wrappers from config
+- Dangerous buffer / string handling
+  - `strcpy`
+  - `strcat`
+  - `sprintf`
+  - `memcpy`
+  - `memmove`
+  - `snprintf` with bounded-write validation
+
+The engine also models safety barriers such as:
+
+- allowlists
+- sanitizers
+- trusted wrappers
+- bounded writes
+- fixed-root path confinement
+- dead paths
+- selected test-only paths
 
 ## Prerequisites
 
-Ubuntu/Debian:
+Tested primarily on Ubuntu/Debian and WSL with Clang/LLVM 18.
+
+System packages:
 
 ```bash
 sudo apt update
 sudo apt install -y build-essential git cmake ninja-build clang-18 clang-tools-18 libclang-18-dev llvm-18-dev llvm-18-tools pkg-config bear ccache jq python3 python3-venv python3-pip
 ```
 
-Python gateway test environment:
+Python environment for `llm_gateway`:
 
 ```bash
 python3 -m venv .venv
@@ -44,138 +155,107 @@ pip install -r llm_gateway/requirements.txt -r llm_gateway/requirements-dev.txt
 
 ## Build
 
-Recommended local configure for both the CLI and VS Code CMake Tools:
+Recommended configure and build flow:
 
 ```bash
 cmake --preset clang18-debug
 cmake --build --preset clang18-debug
 ```
 
-VS Code note:
-
-- the repo includes `CMakePresets.json` to force `clang-18`, `clang++-18`, `Ninja`, `LLVM_DIR`, and `Clang_DIR`
-- `.vscode/settings.json` tells CMake Tools to use presets instead of guessing a GCC/G++ toolchain
-- the workspace also points VS Code C/C++ IntelliSense at `build/compile_commands.json` and `clang++-18`
-
-If VS Code was previously configured with GCC/G++, do this once after pulling the repo changes:
-
-1. `Ctrl+Shift+P` -> `CMake: Delete Cache and Reconfigure`
-2. `Ctrl+Shift+P` -> `CMake: Select Configure Preset`
-3. choose `Clang 18 Debug`
-4. wait for configure to finish
-
 Manual equivalent:
 
 ```bash
 cmake -S . -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=Debug \
-  -DCMAKE_CXX_COMPILER=clang++-18 \
   -DCMAKE_C_COMPILER=clang-18 \
+  -DCMAKE_CXX_COMPILER=clang++-18 \
   -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm \
   -DClang_DIR=/usr/lib/llvm-18/lib/cmake/clang
 
 cmake --build build
 ```
 
+The repo also includes `CMakePresets.json` for VS Code CMake Tools and local CLI use.
+
 ## Test
 
+Run the C++ test suite:
+
 ```bash
-ctest --preset clang18-debug
+ctest --preset clang18-debug --output-on-failure
+```
+
+Run the Python gateway tests:
+
+```bash
 source .venv/bin/activate
 python -m pytest llm_gateway/tests
 ```
 
-## Reproducible Demo
+## Example Scan
 
-The repo includes a built-in deterministic demo mode for five curated cases, one for each current deterministic outcome:
-
-- `confirmed_issue`
-- `likely_issue`
-- `needs_review`
-- `likely_safe`
-- `safe_suppressed`
-
-Copy-paste walkthrough:
+Deterministic text scan on the built-in sample corpus:
 
 ```bash
-cmake --build build
-
-./build/sast-cli demo
-
-./build/sast-cli demo --format json --out build/demo.json
-
-jq '.' build/demo.json
+./build/sast-cli scan --repo tests/cases/demo --format text
 ```
 
-Optional local LLM enrichment for eligible demo cases:
+Deterministic JSON output:
 
 ```bash
-./build/sast-cli demo \
-  --llm-review \
-  --llm-gateway http://127.0.0.1:8081
+./build/sast-cli scan \
+  --repo tests/cases/demo \
+  --format json \
+  --out build/scan.json
+
+jq '.' build/scan.json
 ```
 
-What the demo does:
-
-- scans the curated sources in `tests/demo/curated`
-- uses the same deterministic pipeline as `scan`
-- keeps deterministic findings as the source of truth
-- can optionally attach advisory LLM review only for `likely_issue`, `needs_review`, and `likely_safe`
-- keeps the wording intentionally conservative for investor or stakeholder walkthroughs
-
-Important honesty note:
-
-- this is a small curated demo
-- it shows the full five-outcome deterministic story on representative cases
-- it is not a claim of complete whole-program proof on arbitrary repositories
-
-## LLM Gateway
-
-The deterministic scanner remains the primary engine. The FastAPI gateway is a narrow sidecar contract for ambiguous or high-value findings only.
-
-Compact request payload fields:
-
-- `candidate_id`
-- `rule_id`
-- `source_summary`
-- `sink_summary`
-- `path_summary`
-- `guard_summary`
-- up to two small `code_windows`
-
-Compact response fields:
-
-- `judgment`
-- `confidence`
-- `cwe`
-- `exploitability`
-- `reasoning_summary`
-- `remediation`
-- `safe_reasoning`
-
-Hard boundaries enforced by the schema:
-
-- no whole repositories
-- no whole files
-- at most two code windows
-- each code window is capped to 12 lines
-
-`needs_review` policy:
-
-- the gateway keeps `needs_review` explicitly uncertain
-- normalized `reasoning_summary` avoids confirmed-vulnerability wording and explains that safety could not be proven and still requires review
-- `safe_reasoning` is omitted for `needs_review` unless real safety evidence exists
-- remediation stays concrete and sink-specific, but remains cautious
-
-Python setup:
+Candidate-only JSON:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r llm_gateway/requirements.txt -r llm_gateway/requirements-dev.txt
+./build/sast-cli scan \
+  --repo tests/cases/demo \
+  --candidates-only \
+  --format json
 ```
 
-Run the gateway with the default local Ollama provider:
+Fact extraction on the included CMake fixture:
+
+```bash
+cmake -S tests/fixtures/cmake_cpp_sample -B tests/fixtures/cmake_cpp_sample/build -G Ninja \
+  -DCMAKE_CXX_COMPILER=clang++-18 \
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+./build/sast-cli facts \
+  --repo tests/fixtures/cmake_cpp_sample \
+  --auto-compdb \
+  --out build/facts.json
+```
+
+## AI-Assisted Review
+
+The AI integration is optional and intentionally narrow.
+
+**What it does**
+
+- Reviews only findings that are already classified as:
+  - `needs_review`
+  - `likely_issue`
+  - `likely_safe`
+- Uses compact structured context only
+- Adds advisory reasoning, CWE hints, exploitability hints, and remediation text
+
+**What it does not do**
+
+- It does not replace deterministic scanning
+- It does not scan whole repositories directly
+- It does not receive whole files or full repo contents
+- It does not upgrade the scanner into a perfect proof system
+
+### Local Ollama / DeepSeek setup
+
+Start the gateway with the local Ollama provider:
 
 ```bash
 source .venv/bin/activate
@@ -184,6 +264,16 @@ export SAST_LLM_PROVIDER=ollama
 export SAST_LLM_BASE_URL=http://127.0.0.1:11434
 export SAST_LLM_MODEL=deepseek-coder:6.7b
 uvicorn llm_gateway.app.main:app --host 127.0.0.1 --port 8081
+```
+
+Run a scan with advisory LLM review:
+
+```bash
+./build/sast-cli scan \
+  --repo tests/cases/demo \
+  --format text \
+  --llm-review \
+  --llm-gateway http://127.0.0.1:8081
 ```
 
 Health and schema endpoints:
@@ -194,297 +284,81 @@ curl http://127.0.0.1:8081/schema/request
 curl http://127.0.0.1:8081/schema/response
 ```
 
-What is mocked vs provider-backed:
+### Provider modes
 
-- default behavior is local `ollama`; no paid API key is required for that path
-- `mock` remains available for tests and dry-run gateway validation
-- `openai_responses` remains available as an optional hosted adapter
-- the scanner stays deterministic-first and only calls the gateway when you pass `--llm-review`
-- only findings already classified as `needs_review`, `likely_issue`, or `likely_safe` are sent to the gateway
-- `confirmed_issue` and `safe_suppressed` findings are never sent
+- `ollama`
+  - local default
+  - no paid API required
+- `mock`
+  - useful for tests and schema/debug flows
+- `openai_responses`
+  - optional hosted adapter
+  - requires `OPENAI_API_KEY`
 
-Required environment variables and switches:
-
-- `SAST_LLM_ENABLED=1` enables provider calls inside the gateway
-- `SAST_LLM_ENABLED=0` disables provider calls and forces deterministic fallback
-- `SAST_LLM_PROVIDER=ollama|mock|openai_responses`
-- `SAST_LLM_BASE_URL=http://127.0.0.1:11434` for local Ollama
-- `SAST_LLM_MODEL=deepseek-coder:6.7b` for the local DeepSeek model
-- `OPENAI_API_KEY=...` is required only for `openai_responses`
-- `SAST_LLM_TIMEOUT=20`
-- `SAST_LLM_MAX_RETRIES=2`
-- `SAST_LLM_GATEWAY_URL=http://127.0.0.1:8081` configures the C++ scanner-to-gateway URL
-- `SAST_LLM_GATEWAY_TIMEOUT=25` configures the C++ scanner-to-gateway timeout in seconds
-
-Enable local Ollama + DeepSeek review:
+Relevant environment variables:
 
 ```bash
-source .venv/bin/activate
 export SAST_LLM_ENABLED=1
 export SAST_LLM_PROVIDER=ollama
 export SAST_LLM_BASE_URL=http://127.0.0.1:11434
 export SAST_LLM_MODEL=deepseek-coder:6.7b
-uvicorn llm_gateway.app.main:app --host 127.0.0.1 --port 8081
+export SAST_LLM_TIMEOUT=20
+export SAST_LLM_MAX_RETRIES=2
+export SAST_LLM_GATEWAY_URL=http://127.0.0.1:8081
+export SAST_LLM_GATEWAY_TIMEOUT=25
 ```
 
-Disable all LLM review but keep the gateway running:
+Important behavior:
 
-```bash
-source .venv/bin/activate
-export SAST_LLM_ENABLED=0
-export SAST_LLM_PROVIDER=mock
-uvicorn llm_gateway.app.main:app --host 127.0.0.1 --port 8081
-```
+- deterministic judgments remain the source of truth
+- `confirmed_issue` and `safe_suppressed` are never sent to the LLM
+- if gateway review fails, times out, or returns invalid output, the scan still succeeds and keeps the deterministic result
 
-Enable mock review locally for tests or schema debugging:
-
-```bash
-source .venv/bin/activate
-export SAST_LLM_ENABLED=1
-export SAST_LLM_PROVIDER=mock
-uvicorn llm_gateway.app.main:app --host 127.0.0.1 --port 8081
-```
-
-Enable hosted OpenAI-compatible review:
-
-```bash
-source .venv/bin/activate
-export SAST_LLM_ENABLED=1
-export SAST_LLM_PROVIDER=openai_responses
-export OPENAI_API_KEY=...
-export SAST_LLM_MODEL=gpt-5-mini
-uvicorn llm_gateway.app.main:app --host 127.0.0.1 --port 8081
-```
-
-## Compile Database Discovery
-
-`sast-cli facts` prefers `compile_commands.json`.
-`sast-cli scan` uses the same discovery order and falls back to synthetic compile commands for standalone source trees when no compile database is present.
-
-Discovery order:
-
-1. `--compdb <path>`
-2. `<repo>/compile_commands.json`
-3. `<repo>/build/**/compile_commands.json`
-4. `<repo>/build-*/**/compile_commands.json`
-
-Generate a compile database for a CMake project:
-
-```bash
-cmake -S <repo> -B <repo>/build -G Ninja \
-  -DCMAKE_CXX_COMPILER=clang++-18 \
-  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-```
-
-Capture a non-CMake build if needed:
-
-```bash
-bear -- make -j"$(nproc)"
-```
-
-## Config Files
-
-The default rule configuration lives under `config/` and is versioned with `"version": 1`:
-
-- `config/rules.json`
-- `config/sources.json`
-- `config/sinks.json`
-- `config/sanitizers.json`
-- `config/wrappers.json`
-
-Repo-local config overrides are loaded from `<repo>/config/` when present. Otherwise the built-in repo config is used.
-
-## Fact Extraction Mode
-
-CLI:
+## Project Layout
 
 ```text
-sast-cli facts --repo <path> [--compdb <path>|--auto-compdb] [--jobs N] [--out <file>]
+include/sast/
+  build/         compile database discovery
+  cli/           CLI interface
+  frontend_cpp/  Clang LibTooling frontend
+  ir/            normalized fact and finding models
+  report/        JSON, SARIF, text, and demo writers
+  rules/         sources, sinks, config registries, candidate detection
+  triage/        scan orchestration
+  validators/    safety validation and decision engine
+
+src/
+  build/         compile database resolution and capture helpers
+  cli/           `sast-cli`
+  frontend_cpp/  AST extraction
+  llm_gateway/   scanner-side gateway client
+  report/        report renderers
+  rules/         rule and candidate logic
+  triage/        main scan pipeline
+  validators/    validator logic
+
+config/          versioned sources/sinks/sanitizers/wrappers/rules
+tests/           unit, integration, golden, regression, and demo fixtures
+benchmarks/      benchmark binary, fixtures, and smoke runner
+llm_gateway/     FastAPI sidecar, providers, schemas, tests
+docs/            documentation assets including demo GIF
 ```
 
-Facts are emitted only for source locations under the requested `--repo` root. The CLI
-normalizes relative and absolute repo paths before compile database discovery and parsing.
+## Benchmarks
 
-Example on the included fixture:
+Build the benchmark target:
 
 ```bash
-cmake -S tests/fixtures/cmake_cpp_sample -B tests/fixtures/cmake_cpp_sample/build -G Ninja \
-  -DCMAKE_CXX_COMPILER=clang++-18 \
-  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-
-./build/sast-cli facts --repo tests/fixtures/cmake_cpp_sample --auto-compdb
+cmake --build --preset clang18-debug --target sast-benchmarks
 ```
 
-Example JSON shape:
-
-```json
-{
-  "compilation_database_path": ".../compile_commands.json",
-  "translation_units": [
-    {
-      "file_path": ".../src/main.cpp",
-      "functions": [
-        {
-          "qualified_name": "main",
-          "return_type": "int",
-          "location": {
-            "file": ".../src/main.cpp",
-            "line": 5,
-            "column": 5
-          },
-          "call_sites": [
-            {
-              "callee": "sample::make_message",
-              "argument_texts": ["name"]
-            }
-          ],
-          "variable_refs": [
-            {
-              "name": "argc",
-              "referenced_kind": "parameter"
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
-```
-
-## Candidate And Validation Scan Mode
-
-CLI:
-
-```text
-sast-cli scan --repo <path> [--compdb <path>|--auto-compdb] [--changed-files <file>] [--candidates-only] [--llm-review] [--llm-gateway <url>] [--jobs N] [--format json|sarif|text] [--out <file>]
-```
-
-Implemented rule families:
-
-- `command_injection.system`: command execution misuse via configured process execution sinks such as `system`, `popen`, and `exec*`
-- `path_traversal.file_open`: user-controlled path flow into configured file open sinks such as `fopen`, `open`, and stream `open`
-- `dangerous_string.unbounded_copy`: dangerous buffer/string handling via configured sinks such as `strcpy`, `strcat`, `sprintf`, `memcpy`, `memmove`, and `snprintf`
-
-Implemented validator checks:
-
-- strict allowlist guards for command execution
-- canonicalized path under a fixed root for file access
-- bounded `snprintf`-style writes for string and buffer handling
-- known safe wrappers loaded from config
-- simple dead-path dismissal for `if (false)`, `if constexpr (false)`, and `#if 0`
-- simple test-only path dismissal and inline/config suppressions
-
-Final decision outcomes:
-
-- `confirmed_issue`
-- `likely_issue`
-- `needs_review`
-- `likely_safe`
-- `safe_suppressed`
-
-Validated finding JSON fields:
-
-- `candidate.id`
-- `candidate.rule_id`
-- `candidate.file`
-- `candidate.line`
-- `candidate.source_summary`
-- `candidate.sink_summary`
-- `candidate.trace_steps`
-- `candidate.provisional_severity`
-- `candidate.evidence_locations`
-- `validation.final_decision`
-- `validation.confidence`
-- `validation.explanation`
-- `validation.safe_reasoning`
-- `validation.ambiguous_reasoning`
-- `validation.matched_positive_conditions`
-- `validation.matched_negative_conditions`
-- `validation.matched_ambiguous_conditions`
-- `validation.llm_review` when `--llm-review` is enabled and the gateway returns a review or deterministic fallback
-
-Example on the included case corpus:
+Run the benchmark binary:
 
 ```bash
-./build/sast-cli scan --repo tests/cases/demo --format json
+./build/sast-benchmarks --repo benchmarks/fixtures/mixed_repo
 ```
 
-Local Ollama-backed review example:
-
-```bash
-source .venv/bin/activate
-export SAST_LLM_ENABLED=1
-export SAST_LLM_PROVIDER=ollama
-export SAST_LLM_BASE_URL=http://127.0.0.1:11434
-export SAST_LLM_MODEL=deepseek-coder:6.7b
-uvicorn llm_gateway.app.main:app --host 127.0.0.1 --port 8081
-
-./build/sast-cli scan \
-  --repo tests/cases/demo \
-  --format text \
-  --llm-review \
-  --llm-gateway http://127.0.0.1:8081
-```
-
-The output is explicitly marked with `"candidate_only": false` and includes:
-
-- the original candidate evidence
-- the final deterministic judgment
-- why the finding was considered safe, ambiguous, or escalated
-- optional `validation.llm_review` enrichment for eligible findings only
-
-Stable schemas:
-
-- validated JSON: `report.schema.json` -> `docs/report.schema.json`
-- candidate-only JSON: `candidate-report.schema.json` -> `docs/candidate-report.schema.json`
-
-Format examples:
-
-```bash
-./build/sast-cli scan --repo tests/cases/demo --format json
-
-./build/sast-cli scan --repo tests/cases/demo --format sarif --out build/demo.sarif
-
-./build/sast-cli scan --repo tests/cases/demo --format text
-
-./build/sast-cli scan \
-  --repo tests/cases/demo \
-  --format json \
-  --llm-review \
-  --llm-gateway http://127.0.0.1:8081
-```
-
-Investor demo output:
-
-```bash
-./build/sast-cli demo
-./build/sast-cli demo --format json --out build/demo.json
-```
-
-Candidate-only debug output remains available in JSON:
-
-```bash
-./build/sast-cli scan --repo tests/cases/demo --candidates-only --format json
-```
-
-Changed-files-only mode narrows the scan to the listed source files:
-
-```bash
-printf 'needs_review_string.cpp\n' > build/demo.changed
-./build/sast-cli scan --repo tests/cases/demo --changed-files build/demo.changed --format json
-```
-
-The changed-file list may contain repo-relative or absolute paths. The scanner normalizes them against `--repo` before filtering translation units.
-
-## Benchmarks And Regression Harness
-
-Build the benchmark binary with the main project:
-
-```bash
-cmake --build build --target sast-benchmarks
-```
-
-Run the benchmark smoke suite:
+Run the benchmark smoke script:
 
 ```bash
 python3 benchmarks/run_smoke.py \
@@ -492,97 +366,40 @@ python3 benchmarks/run_smoke.py \
   --cli-binary ./build/sast-cli
 ```
 
-Optional: measure gateway round-trip latency for one eligible ambiguous or incomplete finding:
-
-```bash
-source .venv/bin/activate
-export SAST_LLM_ENABLED=1
-export SAST_LLM_PROVIDER=ollama
-export SAST_LLM_BASE_URL=http://127.0.0.1:11434
-export SAST_LLM_MODEL=deepseek-coder:6.7b
-uvicorn llm_gateway.app.main:app --host 127.0.0.1 --port 8081
-
-python3 benchmarks/run_smoke.py \
-  --benchmark-binary ./build/sast-benchmarks \
-  --cli-binary ./build/sast-cli \
-  --gateway-url http://127.0.0.1:8081
-```
-
-The smoke suite exercises:
-
-- `benchmarks/fixtures/vulnerable_examples`
-- `benchmarks/fixtures/safe_lookalikes`
-- `benchmarks/fixtures/ambiguous_cases`
-- `benchmarks/fixtures/cross_function`
-- `benchmarks/fixtures/mixed_repo`
-
-Regression coverage lives in:
-
-- `tests/regression/false_positives`
-- `tests/regression/false_negatives`
-
-Reported scan metrics currently include:
-
-- `parse_time_ms`
-- `candidate_generation_time_ms`
-- `validation_time_ms`
-- `full_scan_time_ms`
-- `translation_units_total`
-- `translation_units_selected`
-- `translation_units_skipped`
-- `effective_skip_rate`
-- `cache_hit_rate`
-- `memory_rss_bytes`
-- `llm_latency_ms`
-
-Notes:
-
-- `memory_rss_bytes` is populated on Linux through `/proc/self/status`
-- `cache_hit_rate` is present as a stable field, but the active pipeline does not yet persist summary cache entries, so it remains `0.0`
-- `llm_latency_ms` is populated when `--llm-review` is enabled on the scanner and at least one eligible finding is reviewed
+The current benchmark harness reports parse time, candidate generation time, validation time, full scan time, skip rate, RSS on Linux, and optional LLM review latency.
 
 ## Current Limitations
 
-- source resolution is intentionally shallow and limited to local initializers, parameters, configured source functions, and simple wrapper/accessor patterns
-- validator reasoning is intentionally local and heuristic; it does not yet prove complex interprocedural invariants
-- wrapper and sanitizer semantics are only as strong as the configured names and the local trace evidence
-- changed-files-only filtering is implemented, but persistent summary caching remains a later milestone
-- the scanner only enriches findings through the gateway when `--llm-review` is explicitly enabled
-- deterministic judgments remain the source of truth; LLM output is advisory metadata only
-- the hosted OpenAI-compatible adapter is verified through mocked HTTP responses, not live paid API calls
-- the local Ollama path is schema-constrained, but model quality still depends on the installed local model
+- C++ only
+- CLI only
+- current rule coverage is intentionally narrow
+- source resolution is mostly local and heuristic, not full whole-program dataflow
+- helper-boundary reasoning exists in limited forms, but this is not a full interprocedural proof engine
+- safety modeling is only as strong as the current validator logic and configured wrappers/sanitizers
+- persistent summary caching is not yet active in the main pipeline
+- the LLM sidecar is advisory and compact-context-only by design
+- there is no web dashboard and no Rust implementation yet
 
-## Current Layout
+## Philosophy
 
-- `include/sast/build`: compile database discovery
-- `include/sast/frontend_cpp`: LibTooling runner
-- `include/sast/ir`: normalized fact IR
-- `include/sast/report`: JSON fact and validated finding rendering
-- `include/sast/rules`: rule specs, source/sink registries, and candidate detection
-- `include/sast/validators`: validator registry, safety checks, and decision engine
-- `include/sast/triage`: shared scan orchestration and metrics
-- `src/cli`: CLI entrypoint
-- `benchmarks`: benchmark binary, smoke runner, and categorized fixture repos
-- `tests/fixtures/cmake_cpp_sample`: tiny CMake-based sample project used for extraction tests
-- `tests/cases`: standalone validated-scan corpus for command execution, path traversal, and string handling
-- `tests/regression`: fixed false-positive and false-negative fixtures that must remain stable
-- `llm_gateway`: FastAPI sidecar with strict schemas, retry/fallback behavior, and mock/provider adapters
+This project is built around a simple security engineering principle:
 
-## Current Milestone Output
+```text
+pattern match -> candidate
+candidate -> validation
+validation -> prove vulnerable or dismiss
+```
 
-The active build verifies:
+That means:
 
-- the project configures and builds against LLVM/Clang 18
-- compile database discovery works on a small CMake fixture
-- fact extraction returns functions, call sites, variable references, and source locations
-- versioned source/sink config loading works
-- candidate generation runs for the initial rule families
-- validator evidence produces `confirmed_issue`, `likely_issue`, `needs_review`, `likely_safe`, and `safe_suppressed`
-- safe and likely-safe outcomes are first-class expected results in the test corpus
-- changed-files-only scans report selected vs skipped translation units and skip rate
-- benchmark fixtures cover vulnerable, safe-looking, ambiguous, and cross-function propagation scenarios
-- regression suites lock in fixed false positives and false negatives
-- the gateway exposes strict request/response schemas plus retry and fallback behavior for ambiguous or high-value findings
-- local Ollama + DeepSeek review works through `llm_gateway`
-- `sast-cli scan --llm-review` enriches eligible findings without changing deterministic decisions
-# SAST-AI-C-TOOL
+- a sink match is not automatically a vulnerability
+- safety barriers matter
+- ambiguity is an allowed outcome
+- “likely safe” and “safe / suppressed” are first-class results
+- the deterministic engine decides; AI can help explain, not replace
+
+## License
+
+No license file is currently included in this repository.
+
+Until a license is added, treat the code as all rights reserved by default.
