@@ -13,6 +13,7 @@ Deterministic C++ static analysis with optional AI-assisted review for ambiguous
 - JSON, SARIF, and human-readable text output
 - Explicit outcomes: `confirmed_issue`, `likely_issue`, `needs_review`, `likely_safe`, `safe_suppressed`
 - Optional local AI review through `llm_gateway` for ambiguous or high-value findings only
+- Interactive terminal launcher with guided demos and setup help
 - Current focus: command execution misuse, path traversal, and dangerous buffer/string handling
 
 ## Overview
@@ -98,6 +99,20 @@ The launcher is terminal-only by design. It will not show the banner when:
 - stdout is not a terminal
 
 The interactive mode is a thin launcher over the existing commands. It does not change the scan pipeline, validators, JSON output, or SARIF output.
+
+What the polished flow does:
+
+- uses numbered choices instead of a freeform repo/file target prompt
+- steers first-time users toward the curated demo or the mixed single-file demo
+- warns before scanning `.` from the repo root and suggests safer first runs
+- keeps engine-only and engine+LLM review paths clearly separated
+
+If you choose `.` from the repo root, the launcher now explains that scanning the whole source tree is valid but noisy, then offers:
+
+- curated five-outcome demo
+- mixed single-file demo
+- scan the current repository anyway
+- enter a different repository path
 
 ## Key Features
 
@@ -282,6 +297,7 @@ The AI integration is optional and intentionally narrow.
   - `likely_safe`
 - Uses compact structured context only
 - Adds advisory reasoning, CWE hints, exploitability hints, and remediation text
+- Keeps remediation sink-specific and consistent with the deterministic judgment
 
 **What it does not do**
 
@@ -349,6 +365,9 @@ Important behavior:
 
 - deterministic judgments remain the source of truth
 - `confirmed_issue` and `safe_suppressed` are never sent to the LLM
+- `needs_review` stays explicitly uncertain in LLM output
+- `likely_issue` stays below a confirmed issue and explains missing proof
+- `likely_safe` keeps safety-leaning wording and avoids sounding like a real vulnerability
 - if gateway review fails, times out, or returns invalid output, the scan still succeeds and keeps the deterministic result
 
 ## Project Layout

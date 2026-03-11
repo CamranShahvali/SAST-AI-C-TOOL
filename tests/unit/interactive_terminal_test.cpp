@@ -11,6 +11,14 @@
 
 namespace {
 
+struct CurrentPathGuard {
+  std::filesystem::path original = std::filesystem::current_path();
+
+  ~CurrentPathGuard() {
+    std::filesystem::current_path(original);
+  }
+};
+
 TEST(InteractiveTerminalTest, SupportedRejectsJsonSarifCiAndNonTerminal) {
   const sast::cli::InteractiveTerminal::Environment interactive{
     .stdin_is_terminal = true,
@@ -67,7 +75,7 @@ TEST(InteractiveTerminalTest, ScriptedSessionBuildsExpectedCommands) {
   std::istringstream input(
     "1\n" + repo_root.string() + "\n"
     "2\n" + file_path.string() + "\n"
-    "4\nrepo\n" + repo_root.string() + "\n"
+    "4\n1\n" + repo_root.string() + "\n"
     "5\n2\nn\n"
     "6\n\n"
     "7\n");
@@ -129,8 +137,79 @@ TEST(InteractiveTerminalTest, ScriptedSessionBuildsExpectedCommands) {
   const auto rendered = output.str();
   EXPECT_NE(rendered.find("Camran Shahvali"), std::string::npos);
   EXPECT_NE(rendered.find("1. Scan repository"), std::string::npos);
+  EXPECT_NE(rendered.find("3. Curated five-outcome demo"), std::string::npos);
   EXPECT_NE(rendered.find("Setup & tutorials"), std::string::npos);
   EXPECT_NE(rendered.find("Exiting interactive terminal."), std::string::npos);
+}
+
+TEST(InteractiveTerminalTest, RepositoryPromptWarnsBeforeScanningRepoRoot) {
+  CurrentPathGuard guard;
+  std::filesystem::current_path(std::filesystem::path(SAST_SOURCE_ROOT));
+
+  std::istringstream input("1\n.\n2\n7\n");
+  std::ostringstream output;
+  std::ostringstream error;
+  std::vector<std::vector<std::string>> commands;
+
+  sast::cli::InteractiveTerminal terminal(
+    input,
+    output,
+    error,
+    [&commands](const std::vector<std::string>& args) {
+      commands.push_back(args);
+      return 0;
+    },
+    [](const sast::cli::InteractiveTerminal::Options&) {
+      return sast::cli::InteractiveTerminal::GatewayStatus{};
+    });
+
+  const auto exit_code = terminal.run({
+    .gateway_url = "http://127.0.0.1:8081",
+    .gateway_timeout_seconds = 2.0,
+    .default_model = "deepseek-coder:6.7b",
+  });
+
+  ASSERT_EQ(exit_code, 0);
+  ASSERT_EQ(commands.size(), 1u);
+  EXPECT_EQ(commands[0], (std::vector<std::string>{
+    "scan",
+    "--repo",
+    (std::filesystem::path(SAST_SOURCE_ROOT) / "tests" / "demo" / "mixed_case").string(),
+    "--format",
+    "text"}));
+
+  const auto rendered = output.str();
+  EXPECT_NE(rendered.find("You are at the ai_sast repository root."), std::string::npos);
+  EXPECT_NE(rendered.find("Curated five-outcome demo"), std::string::npos);
+  EXPECT_NE(rendered.find("Mixed single-file demo"), std::string::npos);
+}
+
+TEST(InteractiveTerminalTest, SingleFilePromptRejectsDirectoryWithGuidance) {
+  std::istringstream input("2\n.\n7\n");
+  std::ostringstream output;
+  std::ostringstream error;
+
+  sast::cli::InteractiveTerminal terminal(
+    input,
+    output,
+    error,
+    [](const std::vector<std::string>&) {
+      ADD_FAILURE() << "Command runner should not be called for invalid file input.";
+      return 1;
+    },
+    [](const sast::cli::InteractiveTerminal::Options&) {
+      return sast::cli::InteractiveTerminal::GatewayStatus{};
+    });
+
+  const auto exit_code = terminal.run({
+    .gateway_url = "http://127.0.0.1:8081",
+    .gateway_timeout_seconds = 2.0,
+    .default_model = "deepseek-coder:6.7b",
+  });
+
+  ASSERT_EQ(exit_code, 0);
+  EXPECT_NE(error.str().find("Use 'Scan repository' for a full tree"), std::string::npos);
+  EXPECT_NE(error.str().find("mixed_paths.cpp"), std::string::npos);
 }
 
 TEST(InteractiveTerminalTest, ApplicationRejectsInteractiveJsonMode) {

@@ -88,12 +88,21 @@ TEST(CliDemoTest, EmitsGoldenJsonOutputForBuiltinDemo) {
     return nullptr;
   };
 
+  const auto* confirmed = case_for_slug("confirmed_vulnerability");
   const auto* likely_issue = case_for_slug("likely_issue");
+  const auto* needs_review = case_for_slug("needs_review");
   const auto* likely_safe = case_for_slug("likely_safe");
+  const auto* suppressed = case_for_slug("safe_suppressed");
+  ASSERT_NE(confirmed, nullptr);
   ASSERT_NE(likely_issue, nullptr);
+  ASSERT_NE(needs_review, nullptr);
   ASSERT_NE(likely_safe, nullptr);
+  ASSERT_NE(suppressed, nullptr);
+  EXPECT_EQ(confirmed->at("finding").value("judgment", ""), "confirmed_issue");
   EXPECT_EQ(likely_issue->at("finding").value("judgment", ""), "likely_issue");
+  EXPECT_EQ(needs_review->at("finding").value("judgment", ""), "needs_review");
   EXPECT_EQ(likely_safe->at("finding").value("judgment", ""), "likely_safe");
+  EXPECT_EQ(suppressed->at("finding").value("judgment", ""), "safe_suppressed");
 }
 
 }  // namespace

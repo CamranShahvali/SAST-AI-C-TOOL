@@ -4,28 +4,36 @@ philosophy: candidate -> validate -> prove vulnerable or dismiss
 compilation_database: $ROOT/synthetic
 findings: 4
 
-[confirmed_issue] command_injection.system $ROOT/tests/cases/demo/confirmed_command.cpp:7
-  confidence: 0.94 deterministic=true
-  source: argv[1]
-  sink:   system(argv[1])
-  explanation: positive vulnerability conditions were satisfied without a safety barrier
+[confirmed_issue] command_injection.system
+  location: $ROOT/tests/cases/demo/confirmed_command.cpp:7
+  deterministic:
+    confidence: 0.94 deterministic=true
+    source: argv[1]
+    sink:   system(argv[1])
+    explanation: positive vulnerability conditions were satisfied without a safety barrier
 
-[confirmed_issue] command_injection.system $ROOT/tests/cases/demo/cross_function_command.cpp:4
-  confidence: 0.94 deterministic=true
-  source: cmd
-  sink:   system(cmd)
-  explanation: positive vulnerability conditions were satisfied without a safety barrier
+[confirmed_issue] command_injection.system
+  location: $ROOT/tests/cases/demo/cross_function_command.cpp:4
+  deterministic:
+    confidence: 0.94 deterministic=true
+    source: cmd
+    sink:   system(cmd)
+    explanation: positive vulnerability conditions were satisfied without a safety barrier
 
-[needs_review] dangerous_string.unbounded_copy $ROOT/tests/cases/demo/needs_review_string.cpp:15
-  confidence: 0.58 deterministic=false
-  source: argv[1]
-  sink:   memcpy(destination, argv[1], length)
-  explanation: copy bound expression could not be proven against the destination extent
-  ambiguous_reasoning: copy bound expression could not be proven against the destination extent
+[needs_review] dangerous_string.unbounded_copy
+  location: $ROOT/tests/cases/demo/needs_review_string.cpp:15
+  deterministic:
+    confidence: 0.58 deterministic=false
+    source: argv[1]
+    sink:   memcpy(destination, argv[1], length)
+    explanation: copy bound expression could not be proven against the destination extent
+    ambiguous_reasoning: copy bound expression could not be proven against the destination extent
 
-[safe_suppressed] path_traversal.file_open $ROOT/tests/cases/demo/safe_dismissed.cpp:14
-  confidence: 0.98 deterministic=true
-  source: canonicalize_under_root(argv[1], "/srv/demo-root")
-  sink:   fopen(path.c_str(), "r")
-  explanation: canonicalized path is confined under a fixed root
-  safe_reasoning: canonicalized path is confined under a fixed root
+[safe_suppressed] path_traversal.file_open
+  location: $ROOT/tests/cases/demo/safe_dismissed.cpp:14
+  deterministic:
+    confidence: 0.98 deterministic=true
+    source: canonicalize_under_root(argv[1], "/srv/demo-root")
+    sink:   fopen(path.c_str(), "r")
+    explanation: canonicalized path is confined under a fixed root
+    safe_reasoning: canonicalized path is confined under a fixed root

@@ -95,6 +95,19 @@ bool looks_like_cpp_file(const std::filesystem::path& path) {
          extension == ".h" || extension == ".hh" || extension == ".hpp" || extension == ".hxx";
 }
 
+std::filesystem::path normalized_path(const std::filesystem::path& path) {
+  std::error_code error;
+  const auto canonical = std::filesystem::weakly_canonical(path, error);
+  if (!error) {
+    return canonical;
+  }
+  return std::filesystem::absolute(path).lexically_normal();
+}
+
+bool is_repo_root(const std::filesystem::path& path) {
+  return normalized_path(path) == normalized_path(std::filesystem::path(SAST_SOURCE_ROOT));
+}
+
 std::filesystem::path temporary_changed_files_path() {
   const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
   return std::filesystem::temp_directory_path() /
@@ -184,8 +197,8 @@ std::string InteractiveTerminal::render_menu() {
     "\n"
     "1. Scan repository\n"
     "2. Scan single C++ file\n"
-    "3. Scan with engine only\n"
-    "4. Scan with engine + LLM review\n"
+    "3. Scan with engine only (choose target)\n"
+    "4. Scan with engine + LLM review (choose target)\n"
     "5. Run demo case\n"
     "6. Setup & tutorials\n"
     "7. Exit\n";
@@ -199,6 +212,9 @@ std::string InteractiveTerminal::render_tutorial(const Options& options) {
   output << "  Use deterministic scanning when you want the engine to remain the only source of truth.\n";
   output << "  Example:\n";
   output << "    ./build/sast-cli scan --repo tests/cases/demo --format text\n\n";
+  output << "  Safer first interactive runs:\n";
+  output << "    - Curated five-outcome demo\n";
+  output << "    - Mixed single-file demo at tests/demo/mixed_case\n\n";
 
   output << "Connecting local AI with Ollama\n";
   output << "  1. Start Ollama locally.\n";
@@ -264,42 +280,85 @@ std::string InteractiveTerminal::prompt(const std::string& label) {
 }
 
 int InteractiveTerminal::scan_repository(bool llm_review, const Options& options) {
-  const auto value = prompt("Repository path [. for current]: ");
-  const auto repo_root = std::filesystem::absolute(
-    value.empty() || value == "." ? std::filesystem::current_path() : std::filesystem::path(value));
+  while (true) {
+    const auto value = prompt("Repository path [press Enter for current directory]: ");
+    const auto repo_root = std::filesystem::absolute(
+      value.empty() || value == "." ? std::filesystem::current_path() : std::filesystem::path(value));
 
-  std::vector<std::string> args{
-    "scan",
-    "--repo",
-    repo_root.string(),
-    "--format",
-    "text",
-  };
-  if (llm_review) {
-    args.push_back("--llm-review");
-    args.push_back("--llm-gateway");
-    args.push_back(options.gateway_url);
-  }
+    if ((value.empty() || value == ".") && is_repo_root(repo_root)) {
+      output_ << "\nYou are at the ai_sast repository root.\n";
+      output_ << "Scanning '.' here is valid, but it is a noisy first run.\n";
+      output_ << "Safer choices:\n";
+      output_ << "1. Curated five-outcome demo\n";
+      output_ << "2. Mixed single-file demo\n";
+      output_ << "3. Scan the current repository anyway\n";
+      output_ << "4. Enter a different repository path\n";
+      output_ << "5. Back\n";
 
-  output_ << '\n';
-  const auto exit_code = run_command(args);
-  if (exit_code != 0) {
-    error_ << "Scan exited with code " << exit_code << ".\n";
+      const auto guard_choice = prompt("Choose a safer starting point [1-5]: ");
+      if (guard_choice == "1" || guard_choice == "2") {
+        return run_demo_selection(guard_choice, llm_review, options);
+      }
+      if (guard_choice == "3") {
+        // Continue below and scan the current repository.
+      } else if (guard_choice == "4") {
+        output_ << '\n';
+        continue;
+      } else if (guard_choice == "5" || guard_choice.empty()) {
+        output_ << '\n';
+        return 0;
+      } else {
+        error_ << "Invalid selection. Choose 1-5.\n\n";
+        continue;
+      }
+    }
+
+    std::vector<std::string> args{
+      "scan",
+      "--repo",
+      repo_root.string(),
+      "--format",
+      "text",
+    };
+    if (llm_review) {
+      args.push_back("--llm-review");
+      args.push_back("--llm-gateway");
+      args.push_back(options.gateway_url);
+    }
+
+    output_ << '\n';
+    const auto exit_code = run_command(args);
+    if (exit_code != 0) {
+      error_ << "Scan exited with code " << exit_code << ".\n";
+    }
+    output_ << '\n';
+    return exit_code;
   }
-  output_ << '\n';
-  return exit_code;
 }
 
 int InteractiveTerminal::scan_single_file(bool llm_review, const Options& options) {
-  const auto value = prompt("C++ file path: ");
+  const auto value = prompt("C++ file path [for a quick demo try tests/demo/mixed_case/mixed_paths.cpp]: ");
   if (value.empty()) {
     error_ << "No file path provided.\n";
     return 2;
   }
+  if (value == ".") {
+    error_ << "'.' is a directory. Use 'Scan repository' for a full tree, or point to a single file such as tests/demo/mixed_case/mixed_paths.cpp.\n";
+    return 2;
+  }
 
   const auto file_path = std::filesystem::absolute(std::filesystem::path(value));
-  if (!std::filesystem::exists(file_path) || !std::filesystem::is_regular_file(file_path)) {
+  if (!std::filesystem::exists(file_path)) {
     error_ << "File not found: " << file_path.string() << '\n';
+    return 2;
+  }
+  if (std::filesystem::is_directory(file_path)) {
+    error_ << "Path is a directory, not a single C++ file: " << file_path.string()
+           << ". Use 'Scan repository' or choose tests/demo/mixed_case/mixed_paths.cpp.\n";
+    return 2;
+  }
+  if (!std::filesystem::is_regular_file(file_path)) {
+    error_ << "Path is not a regular file: " << file_path.string() << '\n';
     return 2;
   }
   if (!looks_like_cpp_file(file_path)) {
@@ -340,29 +399,34 @@ int InteractiveTerminal::scan_single_file(bool llm_review, const Options& option
 }
 
 int InteractiveTerminal::scan_target_prompt(bool llm_review, const Options& options) {
-  const auto target = prompt("Target type [repo/file]: ");
-  if (target == "repo" || target == "repository" || target == "1") {
+  output_ << "\nScan target\n";
+  output_ << "1. Repository path\n";
+  output_ << "2. Single C++ file\n";
+  output_ << "3. Curated five-outcome demo\n";
+  output_ << "4. Mixed single-file demo\n";
+  output_ << "5. Back\n";
+
+  const auto target = prompt("Choose a target [1-5]: ");
+  if (target == "1") {
     return scan_repository(llm_review, options);
   }
-  if (target == "file" || target == "2") {
+  if (target == "2") {
     return scan_single_file(llm_review, options);
   }
-  error_ << "Unknown target type. Use repo or file.\n";
+  if (target == "3" || target == "4") {
+    return run_demo_selection(target, llm_review, options);
+  }
+  if (target == "5" || target.empty()) {
+    return 0;
+  }
+  error_ << "Invalid selection. Choose 1-5.\n";
   return 2;
 }
 
-int InteractiveTerminal::run_demo_menu(const Options& options) {
-  output_ << "\n1. Curated five-outcome demo\n";
-  output_ << "2. Mixed single-file demo\n";
-  output_ << "3. Back\n";
-  const auto selection = prompt("Choose a demo [1-3]: ");
-  if (selection == "3" || selection.empty()) {
-    return 0;
-  }
-
-  const auto llm = prompt("Enable LLM review? [y/N]: ");
-  const auto llm_review = llm == "y" || llm == "Y" || llm == "yes" || llm == "YES";
-
+int InteractiveTerminal::run_demo_selection(
+  std::string_view selection,
+  bool llm_review,
+  const Options& options) {
   std::vector<std::string> args;
   if (selection == "1") {
     args = {"demo"};
@@ -392,6 +456,20 @@ int InteractiveTerminal::run_demo_menu(const Options& options) {
   }
   output_ << '\n';
   return exit_code;
+}
+
+int InteractiveTerminal::run_demo_menu(const Options& options) {
+  output_ << "\n1. Curated five-outcome demo\n";
+  output_ << "2. Mixed single-file demo\n";
+  output_ << "3. Back\n";
+  const auto selection = prompt("Choose a demo [1-3]: ");
+  if (selection == "3" || selection.empty()) {
+    return 0;
+  }
+
+  const auto llm = prompt("Enable LLM review? [y/N]: ");
+  const auto llm_review = llm == "y" || llm == "Y" || llm == "yes" || llm == "YES";
+  return run_demo_selection(selection, llm_review, options);
 }
 
 int InteractiveTerminal::run_command(const std::vector<std::string>& args) const {

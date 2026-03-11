@@ -208,33 +208,35 @@ std::string ReportWriters::to_text(const ir::ValidatedScanResult& result) {
   for (const auto& entry : sorted_findings(result)) {
     const auto& finding = *entry.finding;
     output << "[" << ir::to_string(finding.validation.final_decision) << "] "
-           << finding.candidate.rule_id << ' '
-           << finding.candidate.file << ':' << finding.candidate.line << '\n';
-    output << "  confidence: " << finding.validation.confidence
+           << finding.candidate.rule_id << '\n';
+    output << "  location: " << finding.candidate.file << ':' << finding.candidate.line << '\n';
+    output << "  deterministic:\n";
+    output << "    confidence: " << finding.validation.confidence
            << " deterministic=" << (finding.validation.deterministic ? "true" : "false") << '\n';
-    output << "  source: " << finding.candidate.source_summary << '\n';
-    output << "  sink:   " << finding.candidate.sink_summary << '\n';
-    output << "  explanation: " << finding.validation.explanation << '\n';
+    output << "    source: " << finding.candidate.source_summary << '\n';
+    output << "    sink:   " << finding.candidate.sink_summary << '\n';
+    output << "    explanation: " << finding.validation.explanation << '\n';
 
     if (!finding.validation.safe_reasoning.empty()) {
-      output << "  safe_reasoning: " << joined_or_empty(finding.validation.safe_reasoning) << '\n';
+      output << "    safe_reasoning: " << joined_or_empty(finding.validation.safe_reasoning) << '\n';
     }
     if (!finding.validation.ambiguous_reasoning.empty()) {
-      output << "  ambiguous_reasoning: " << joined_or_empty(finding.validation.ambiguous_reasoning) << '\n';
+      output << "    ambiguous_reasoning: " << joined_or_empty(finding.validation.ambiguous_reasoning) << '\n';
     }
     if (!finding.validation.suppressions.empty()) {
-      output << "  suppressions: " << joined_or_empty(finding.validation.suppressions) << '\n';
+      output << "    suppressions: " << joined_or_empty(finding.validation.suppressions) << '\n';
     }
     if (finding.validation.llm_review) {
-      output << "  llm_review: provider_status=" << finding.validation.llm_review->provider_status
-             << " judgment=" << ir::to_string(finding.validation.llm_review->judgment)
+      output << "  llm_review:\n";
+      output << "    provider_status: " << finding.validation.llm_review->provider_status << '\n';
+      output << "    judgment: " << ir::to_string(finding.validation.llm_review->judgment)
              << " confidence=" << finding.validation.llm_review->confidence << '\n';
-      output << "  llm_reasoning: " << finding.validation.llm_review->reasoning_summary << '\n';
+      output << "    reasoning: " << finding.validation.llm_review->reasoning_summary << '\n';
       if (finding.validation.llm_review->safe_reasoning) {
-        output << "  llm_safe_reasoning: " << *finding.validation.llm_review->safe_reasoning << '\n';
+        output << "    safe_reasoning: " << *finding.validation.llm_review->safe_reasoning << '\n';
       }
       if (finding.validation.llm_review->remediation) {
-        output << "  llm_remediation: " << *finding.validation.llm_review->remediation << '\n';
+        output << "    remediation: " << *finding.validation.llm_review->remediation << '\n';
       }
     }
     output << '\n';

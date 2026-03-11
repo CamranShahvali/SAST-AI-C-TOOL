@@ -47,10 +47,11 @@ class InteractiveTerminal {
   int run(const Options& options);
 
  private:
-  [[nodiscard]] std::string prompt(const std::string& label);
+ [[nodiscard]] std::string prompt(const std::string& label);
   int scan_repository(bool llm_review, const Options& options);
   int scan_single_file(bool llm_review, const Options& options);
   int scan_target_prompt(bool llm_review, const Options& options);
+  int run_demo_selection(std::string_view selection, bool llm_review, const Options& options);
   int run_demo_menu(const Options& options);
   int run_command(const std::vector<std::string>& args) const;
 

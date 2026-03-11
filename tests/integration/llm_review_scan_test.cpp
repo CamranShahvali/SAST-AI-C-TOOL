@@ -4,6 +4,7 @@
 #include <string>
 
 #include "sast/llm_gateway/review_client.hpp"
+#include "sast/report/report_writers.hpp"
 #include "sast/triage/scan_service.hpp"
 #include "test_support.hpp"
 
@@ -118,6 +119,26 @@ TEST(LlmReviewScanTest, EnrichesEligibleCuratedDemoCasesWhenGatewayIsEnabled) {
   }
 
   EXPECT_EQ(enriched_count, 3);
+}
+
+TEST(LlmReviewScanTest, TextOutputSeparatesDeterministicAndLlmSections) {
+  auto transport = std::make_shared<RecordingTransport>();
+  sast::triage::ScanService service;
+  const auto bundle = service.scan({
+    .repo_root = sast::testsupport::source_root() / "tests" / "cases" / "demo",
+    .jobs = 1,
+    .llm_review = true,
+    .llm_gateway_url = "http://127.0.0.1:8081",
+    .llm_timeout_seconds = 1.0,
+    .llm_transport = transport,
+  });
+
+  const auto rendered = sast::report::ReportWriters::to_text(bundle.validated);
+
+  EXPECT_NE(rendered.find("  deterministic:\n"), std::string::npos);
+  EXPECT_NE(rendered.find("  llm_review:\n"), std::string::npos);
+  EXPECT_NE(rendered.find("    reasoning: "), std::string::npos);
+  EXPECT_NE(rendered.find("    remediation: "), std::string::npos);
 }
 
 }  // namespace

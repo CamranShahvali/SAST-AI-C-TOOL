@@ -40,6 +40,20 @@ def _judgment_guidance(request: ReviewRequest) -> str:
             "Avoid phrases such as 'buffer overflow vulnerability', 'vulnerable', or 'exploit is possible'.\n"
             "Keep the returned judgment as needs_review.\n"
         )
+    if request.current_judgment == "likely_issue":
+        return (
+            "The deterministic judgment is likely_issue.\n"
+            "Keep the result below confirmed_issue.\n"
+            "Explain why the risk is real enough to escalate, but why proof is still incomplete.\n"
+            "Do not describe this as fully confirmed or completely exploitable.\n"
+        )
+    if request.current_judgment == "likely_safe":
+        return (
+            "The deterministic judgment is likely_safe.\n"
+            "Do not frame this as a real vulnerability.\n"
+            "Explain that safety evidence exists, but the compact context does not yet prove a full safety barrier.\n"
+            "Phrase any remediation as a way to make the safety proof more explicit at the sink.\n"
+        )
     return "Do not overstate certainty beyond the deterministic judgment.\n"
 
 
@@ -71,7 +85,8 @@ def _is_generic_remediation(remediation: str | None) -> bool:
         "sanitize input" in normalized or
         "review the trace" in normalized or
         "review the deterministic trace" in normalized or
-        "safer api" in normalized
+        "safer api" in normalized or
+        "no additional remediation required" in normalized
     )
 
 
@@ -86,6 +101,36 @@ def _concrete_remediation(request: ReviewRequest) -> str:
             return "Tie the copy length to the destination extent, for example sizeof(destination), and reject or clamp larger runtime lengths before the memcpy-style sink."
         return "Use a bounded write API and tie the bound to the destination extent instead of an unchecked runtime length."
     return "Apply a concrete guard directly at the sink and keep the deterministic evidence explicit."
+
+
+def _likely_safe_remediation(request: ReviewRequest) -> str:
+    sink = request.sink_summary.lower()
+    if request.rule_id == "command_injection.system":
+        return "If you want a full safety proof here, keep a fixed argv vector or place an explicit allowlist immediately before the command sink."
+    if request.rule_id == "path_traversal.file_open":
+        return "If you want this path to become provably safe, canonicalize it under a fixed trusted root immediately before the file-open sink."
+    if request.rule_id == "dangerous_string.unbounded_copy":
+        if "memcpy" in sink or "memmove" in sink:
+            return "If you want stronger proof here, check the runtime length against the destination extent and tie the copy bound directly to that extent before the memcpy-style sink."
+        return "If you want stronger proof here, keep the bound adjacent to the destination extent and use a bounded write API."
+    return "If you want stronger proof here, keep the safety guard explicit and adjacent to the sink."
+
+
+def _preferred_remediation(request: ReviewRequest) -> str:
+    if request.current_judgment == "likely_safe":
+        return _likely_safe_remediation(request)
+    return _concrete_remediation(request)
+
+
+def _overstates_likely_safe(remediation: str | None) -> bool:
+    if remediation is None:
+        return False
+    normalized = remediation.lower()
+    return (
+        "vulnerab" in normalized or
+        "exploit" in normalized or
+        "sanitize input" in normalized
+    )
 
 
 def _needs_review_reasoning(request: ReviewRequest) -> str:
@@ -106,15 +151,25 @@ def _normalize_review_response(
     provider_status: str | None = None,
 ) -> ReviewResponse:
     if request.current_judgment != "needs_review":
-        normalized = response
+        remediation = response.remediation
+        if _is_generic_remediation(remediation) or (
+            request.current_judgment == "likely_safe" and _overstates_likely_safe(remediation)
+        ):
+            remediation = _preferred_remediation(request)
+
+        updates: dict[str, object] = {}
+        if remediation != response.remediation:
+            updates["remediation"] = _truncate(remediation) if remediation is not None else None
         if provider_status is not None:
-            normalized = normalized.model_copy(update={"provider_status": provider_status})
+            updates["provider_status"] = provider_status
+
+        normalized = response if not updates else response.model_copy(update=updates)
         validate_review_response(normalized)
         return normalized
 
     remediation = response.remediation
     if _is_generic_remediation(remediation):
-        remediation = _concrete_remediation(request)
+        remediation = _preferred_remediation(request)
 
     normalized = response.model_copy(
         update={
