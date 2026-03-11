@@ -1,0 +1,56 @@
+#!/usr/bin/expect -f
+set timeout -1
+
+proc pause {seconds} {
+    sleep $seconds
+}
+
+proc type_line {text} {
+    foreach c [split $text ""] {
+        send -- $c
+        sleep 0.08
+    }
+}
+
+spawn ./build/sast-cli interactive
+
+pause 3
+
+expect "Select an option"
+type_line "6\r"
+pause 6
+
+expect "Press Enter to return to the menu..."
+type_line "\r"
+pause 3
+
+expect "Select an option"
+type_line "5\r"
+pause 2
+
+expect "Choose a demo"
+type_line "1\r"
+pause 2
+
+expect "Enable LLM review?"
+type_line "y\r"
+pause 10
+
+expect "Select an option"
+pause 2
+type_line "4\r"
+pause 2
+
+expect "Choose a target"
+type_line "1\r"
+pause 2
+
+expect "Repository path"
+type_line "tests/demo/mixed_case\r"
+pause 8
+
+expect "Select an option"
+pause 3
+type_line "7\r"
+
+expect eof

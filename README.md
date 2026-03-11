@@ -4,7 +4,7 @@ Deterministic C++ static analysis with optional AI-assisted review for ambiguous
 
 `ai_sast` is a C++-first SAST MVP built around a simple rule: matching a risky pattern is not enough. The engine generates candidates, validates safety barriers, and only then decides whether a finding is confirmed, likely, ambiguous, or safe.
 
-![CLI Demo](docs/demo.gif)
+![CLI Demo](docs/demo/demo.gif)
 
 **At a glance**
 
@@ -62,6 +62,12 @@ Optional advisory LLM enrichment for eligible demo cases:
 ```
 
 The demo is intentionally small and curated. It shows how the engine behaves on representative cases. It is not a claim of complete proof across arbitrary repositories.
+
+Demo recording assets live under `docs/demo/`:
+
+- `docs/demo/demo.gif` for the README preview
+- `docs/demo/demo.cast` for the terminal recording
+- `docs/demo/run_demo.expect` for the scripted interactive capture flow
 
 Single-file mixed demo case:
 
