@@ -9,7 +9,7 @@ namespace sast::report {
 namespace {
 
 nlohmann::json finding_to_json(const ir::FinalFinding& finding) {
-  return nlohmann::json{
+  nlohmann::json json{
     {"rule_id", finding.candidate.rule_id},
     {"file", finding.candidate.file},
     {"line", finding.candidate.line},
@@ -23,6 +23,10 @@ nlohmann::json finding_to_json(const ir::FinalFinding& finding) {
     {"safe_reasoning", finding.validation.safe_reasoning},
     {"ambiguous_reasoning", finding.validation.ambiguous_reasoning},
   };
+  json["llm_review"] = finding.validation.llm_review
+                         ? nlohmann::json(*finding.validation.llm_review)
+                         : nlohmann::json(nullptr);
+  return json;
 }
 
 std::string joined(const std::vector<std::string>& values) {
@@ -73,27 +77,48 @@ std::string DemoReportWriter::to_text(const DemoReport& report) {
     const auto& finding = item.finding;
     output << (index + 1) << ". " << item.title << '\n';
     output << "   story: " << item.story << '\n';
-    output << "   file: " << finding.candidate.file << ':' << finding.candidate.line << '\n';
-    output << "   rule: " << finding.candidate.rule_id << '\n';
-    output << "   judgment: " << ir::to_string(finding.validation.final_decision)
+    output << "   takeaway: " << item.takeaway << '\n';
+    output << "   deterministic:\n";
+    output << "     file: " << finding.candidate.file << ':' << finding.candidate.line << '\n';
+    output << "     rule: " << finding.candidate.rule_id << '\n';
+    output << "     judgment: " << ir::to_string(finding.validation.final_decision)
            << " confidence=" << finding.validation.confidence
            << " deterministic=" << (finding.validation.deterministic ? "true" : "false") << '\n';
-    output << "   takeaway: " << item.takeaway << '\n';
-    output << "   evidence: " << joined(finding.candidate.trace_steps) << '\n';
-    output << "   explanation: " << finding.validation.explanation << '\n';
+    output << "     source: " << finding.candidate.source_summary << '\n';
+    output << "     sink:   " << finding.candidate.sink_summary << '\n';
+    output << "     evidence: " << joined(finding.candidate.trace_steps) << '\n';
+    output << "     explanation: " << finding.validation.explanation << '\n';
     if (!finding.validation.safe_reasoning.empty()) {
-      output << "   safe_reasoning: " << joined(finding.validation.safe_reasoning) << '\n';
+      output << "     safe_reasoning: " << joined(finding.validation.safe_reasoning) << '\n';
     }
     if (!finding.validation.ambiguous_reasoning.empty()) {
-      output << "   ambiguous_reasoning: " << joined(finding.validation.ambiguous_reasoning) << '\n';
+      output << "     ambiguous_reasoning: " << joined(finding.validation.ambiguous_reasoning) << '\n';
+    }
+
+    if (finding.validation.llm_review) {
+      output << "   llm_review:\n";
+      output << "     provider_status: " << finding.validation.llm_review->provider_status << '\n';
+      output << "     judgment: " << ir::to_string(finding.validation.llm_review->judgment)
+             << " confidence=" << finding.validation.llm_review->confidence << '\n';
+      output << "     reasoning: " << finding.validation.llm_review->reasoning_summary << '\n';
+      if (finding.validation.llm_review->safe_reasoning) {
+        output << "     safe_reasoning: " << *finding.validation.llm_review->safe_reasoning << '\n';
+      }
+      if (finding.validation.llm_review->remediation) {
+        output << "     remediation: " << *finding.validation.llm_review->remediation << '\n';
+      }
+    } else {
+      output << "   llm_review: not requested or not eligible\n";
     }
     output << '\n';
   }
 
   output << "takeaway:\n";
-  output << "- The deterministic engine can confirm a direct issue.\n";
-  output << "- It can dismiss a lookalike when the validator proves a safety barrier.\n";
-  output << "- It can still make a deterministic call on a helper-boundary case in the current MVP.\n";
+  output << "- confirmed_issue: direct untrusted input reaches a dangerous sink without a safety barrier.\n";
+  output << "- likely_issue: risk evidence is strong, but proof is still incomplete.\n";
+  output << "- needs_review: the engine cannot yet prove the code safe or unsafe.\n";
+  output << "- likely_safe: safety evidence exists, but it is not yet a full proof.\n";
+  output << "- safe_suppressed: the validator proved a concrete safety barrier and dismissed the candidate.\n";
   return output.str();
 }
 

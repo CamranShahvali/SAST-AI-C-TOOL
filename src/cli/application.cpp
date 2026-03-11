@@ -40,6 +40,9 @@ struct ParsedDemoArgs {
   std::string format = "text";
   std::optional<std::filesystem::path> out;
   std::size_t jobs = 1;
+  bool llm_review = false;
+  std::string llm_gateway_url = "http://127.0.0.1:8081";
+  double llm_timeout_seconds = 25.0;
 };
 
 struct DemoCaseSpec {
@@ -104,6 +107,8 @@ ParsedFactsArgs parse_facts_args(const std::vector<std::string>& args) {
 
 ParsedDemoArgs parse_demo_args(const std::vector<std::string>& args) {
   ParsedDemoArgs parsed;
+  parsed.llm_gateway_url = env_or_default("SAST_LLM_GATEWAY_URL", parsed.llm_gateway_url);
+  parsed.llm_timeout_seconds = std::stod(env_or_default("SAST_LLM_GATEWAY_TIMEOUT", "25"));
   for (std::size_t index = 0; index < args.size(); ++index) {
     const auto& arg = args[index];
     if (arg == "--repo") {
@@ -118,6 +123,11 @@ ParsedDemoArgs parse_demo_args(const std::vector<std::string>& args) {
     } else if (arg == "--jobs") {
       parsed.jobs = static_cast<std::size_t>(std::stoul(require_value(args, index)));
       ++index;
+    } else if (arg == "--llm-review") {
+      parsed.llm_review = true;
+    } else if (arg == "--llm-gateway") {
+      parsed.llm_gateway_url = require_value(args, index);
+      ++index;
     }
   }
   return parsed;
@@ -131,24 +141,38 @@ const std::vector<DemoCaseSpec>& demo_specs() {
   static const std::vector<DemoCaseSpec> specs{
     {
       .slug = "confirmed_vulnerability",
-      .title = "Confirmed vulnerability",
+      .title = "Confirmed issue",
       .file_name = "confirmed_command.cpp",
       .story = "Direct user-controlled input reaches a command execution sink.",
-      .takeaway = "The deterministic engine confirms the issue instead of just pattern matching a sink.",
+      .takeaway = "The deterministic engine confirms the issue because no safety barrier is present.",
     },
     {
-      .slug = "dismissed_false_positive",
-      .title = "Dismissed false positive",
+      .slug = "likely_issue",
+      .title = "Likely issue",
+      .file_name = "likely_issue_path.cpp",
+      .story = "User input reaches file-open code through a normalizer the engine does not yet trust as a fixed-root guard.",
+      .takeaway = "Risk is real enough to escalate, but proof is still incomplete because the helper semantics are not modeled.",
+    },
+    {
+      .slug = "needs_review",
+      .title = "Needs review",
+      .file_name = "needs_review_string.cpp",
+      .story = "A bounded copy uses a runtime length the engine cannot prove against the destination extent.",
+      .takeaway = "This stays uncertain until a human reviewer or stronger range analysis can prove the bound.",
+    },
+    {
+      .slug = "likely_safe",
+      .title = "Likely safe",
+      .file_name = "likely_safe_path.cpp",
+      .story = "A path guard removes simple traversal patterns before file access, but the engine does not treat it as a full fixed-root proof.",
+      .takeaway = "Safety evidence exists, so the result leans safe without claiming complete proof.",
+    },
+    {
+      .slug = "safe_suppressed",
+      .title = "Safe / suppressed",
       .file_name = "safe_dismissed.cpp",
       .story = "User input reaches file-open code, but the validator proves the path is constrained under a fixed root.",
       .takeaway = "A lookalike path traversal pattern is dismissed because the safety barrier is explicit and provable.",
-    },
-    {
-      .slug = "cross_function_propagation",
-      .title = "Cross-function case",
-      .file_name = "cross_function_command.cpp",
-      .story = "The sink sits behind a helper function, so the demo is not limited to a single inline expression.",
-      .takeaway = "The current MVP still reaches a deterministic decision on a helper-boundary case without claiming unlimited whole-program proof.",
     },
   };
   return specs;
@@ -296,7 +320,9 @@ int Application::run_demo(const std::vector<std::string>& args) const {
     .explicit_compdb = std::nullopt,
     .changed_files = std::nullopt,
     .jobs = parsed.jobs,
-    .llm_review = false,
+    .llm_review = parsed.llm_review,
+    .llm_gateway_url = parsed.llm_gateway_url,
+    .llm_timeout_seconds = parsed.llm_timeout_seconds,
   });
 
   report::DemoReport report;

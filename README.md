@@ -87,11 +87,13 @@ python -m pytest llm_gateway/tests
 
 ## Reproducible Demo
 
-The repo includes a built-in deterministic demo mode for three curated cases:
+The repo includes a built-in deterministic demo mode for five curated cases, one for each current deterministic outcome:
 
-- a real confirmed vulnerability
-- a dismissed lookalike that is proven safe
-- a helper-boundary case that still reaches a deterministic decision
+- `confirmed_issue`
+- `likely_issue`
+- `needs_review`
+- `likely_safe`
+- `safe_suppressed`
 
 Copy-paste walkthrough:
 
@@ -105,17 +107,26 @@ cmake --build build
 jq '.' build/demo.json
 ```
 
+Optional local LLM enrichment for eligible demo cases:
+
+```bash
+./build/sast-cli demo \
+  --llm-review \
+  --llm-gateway http://127.0.0.1:8081
+```
+
 What the demo does:
 
 - scans the curated sources in `tests/demo/curated`
 - uses the same deterministic pipeline as `scan`
-- does not call the LLM gateway
+- keeps deterministic findings as the source of truth
+- can optionally attach advisory LLM review only for `likely_issue`, `needs_review`, and `likely_safe`
 - keeps the wording intentionally conservative for investor or stakeholder walkthroughs
 
 Important honesty note:
 
 - this is a small curated demo
-- it shows how the engine confirms and dismisses representative cases
+- it shows the full five-outcome deterministic story on representative cases
 - it is not a claim of complete whole-program proof on arbitrary repositories
 
 ## LLM Gateway

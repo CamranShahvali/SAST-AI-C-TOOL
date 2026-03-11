@@ -1,37 +1,81 @@
 ai_sast curated demo 0.2.0
-cases: 3
+cases: 5
 philosophy: candidate -> validate -> prove vulnerable or dismiss
-note: This is a small curated demo scanned with the deterministic engine. It shows confirmed and dismissed outcomes on representative examples, not complete proof across arbitrary code bases.
+note: This is a small curated demo scanned with the deterministic engine. When enabled, any LLM review is advisory only. It shows representative outcomes, not complete proof across arbitrary code bases.
 
-1. Confirmed vulnerability
+1. Confirmed issue
    story: Direct user-controlled input reaches a command execution sink.
-   file: $ROOT/tests/demo/curated/confirmed_command.cpp:7
-   rule: command_injection.system
-   judgment: confirmed_issue confidence=0.94 deterministic=true
-   takeaway: The deterministic engine confirms the issue instead of just pattern matching a sink.
-   evidence: candidate only: configured sink system matched rule family command_injection; file path matches configured test marker; expression depends on parameter argv; expression references argv
-   explanation: positive vulnerability conditions were satisfied without a safety barrier
+   takeaway: The deterministic engine confirms the issue because no safety barrier is present.
+   deterministic:
+     file: $ROOT/tests/demo/curated/confirmed_command.cpp:7
+     rule: command_injection.system
+     judgment: confirmed_issue confidence=0.94 deterministic=true
+     source: argv[1]
+     sink:   system(argv[1])
+     evidence: candidate only: configured sink system matched rule family command_injection; file path matches configured test marker; expression depends on parameter argv; expression references argv
+     explanation: positive vulnerability conditions were satisfied without a safety barrier
+   llm_review: not requested or not eligible
 
-2. Dismissed false positive
+2. Likely issue
+   story: User input reaches file-open code through a normalizer the engine does not yet trust as a fixed-root guard.
+   takeaway: Risk is real enough to escalate, but proof is still incomplete because the helper semantics are not modeled.
+   deterministic:
+     file: $ROOT/tests/demo/curated/likely_issue_path.cpp:10
+     rule: path_traversal.file_open
+     judgment: likely_issue confidence=0.76 deterministic=false
+     source: normalize_path(argv[1])
+     sink:   fopen(normalize_path(argv[1]), "r")
+     evidence: candidate only: configured sink fopen matched rule family path_traversal; file path matches configured test marker; expression includes unmodeled helper call normalize_path; expression depends on parameter argv; expression references argv
+     explanation: path validation wrapper is not modeled
+     ambiguous_reasoning: path validation wrapper is not modeled
+   llm_review: not requested or not eligible
+
+3. Needs review
+   story: A bounded copy uses a runtime length the engine cannot prove against the destination extent.
+   takeaway: This stays uncertain until a human reviewer or stronger range analysis can prove the bound.
+   deterministic:
+     file: $ROOT/tests/demo/curated/needs_review_string.cpp:15
+     rule: dangerous_string.unbounded_copy
+     judgment: needs_review confidence=0.58 deterministic=false
+     source: argv[1]
+     sink:   memcpy(destination, argv[1], length)
+     evidence: candidate only: configured sink memcpy matched rule family dangerous_string; file path matches configured test marker; expression depends on parameter argv; expression references argv; copy length expression length
+     explanation: copy bound expression could not be proven against the destination extent
+     ambiguous_reasoning: copy bound expression could not be proven against the destination extent
+   llm_review: not requested or not eligible
+
+4. Likely safe
+   story: A path guard removes simple traversal patterns before file access, but the engine does not treat it as a full fixed-root proof.
+   takeaway: Safety evidence exists, so the result leans safe without claiming complete proof.
+   deterministic:
+     file: $ROOT/tests/demo/curated/likely_safe_path.cpp:15
+     rule: path_traversal.file_open
+     judgment: likely_safe confidence=0.78 deterministic=false
+     source: argv[1]
+     sink:   fopen(path.c_str(), "r")
+     evidence: candidate only: configured sink fopen matched rule family path_traversal; file path matches configured test marker; value resolves through local path = argv[1]; expression depends on parameter argv; expression references argv; allowlist predicate is_safe_path observed for path
+     explanation: path allowlist predicate constrains user input
+     safe_reasoning: path allowlist predicate constrains user input
+     ambiguous_reasoning: path allowlist exists but root confinement proof is incomplete
+   llm_review: not requested or not eligible
+
+5. Safe / suppressed
    story: User input reaches file-open code, but the validator proves the path is constrained under a fixed root.
-   file: $ROOT/tests/demo/curated/safe_dismissed.cpp:14
-   rule: path_traversal.file_open
-   judgment: safe_suppressed confidence=0.98 deterministic=true
    takeaway: A lookalike path traversal pattern is dismissed because the safety barrier is explicit and provable.
-   evidence: candidate only: configured sink fopen matched rule family path_traversal; file path matches configured test marker; value resolves through local path = canonicalize_under_root(argv[1], "/srv/demo-root"); expression flows through configured sanitizer canonicalize_under_root; expression depends on parameter argv; expression references argv
-   explanation: canonicalized path is confined under a fixed root
-   safe_reasoning: canonicalized path is confined under a fixed root
-
-3. Cross-function case
-   story: The sink sits behind a helper function, so the demo is not limited to a single inline expression.
-   file: $ROOT/tests/demo/curated/cross_function_command.cpp:4
-   rule: command_injection.system
-   judgment: confirmed_issue confidence=0.94 deterministic=true
-   takeaway: The current MVP still reaches a deterministic decision on a helper-boundary case without claiming unlimited whole-program proof.
-   evidence: candidate only: configured sink system matched rule family command_injection; file path matches configured test marker; expression depends on parameter cmd
-   explanation: positive vulnerability conditions were satisfied without a safety barrier
+   deterministic:
+     file: $ROOT/tests/demo/curated/safe_dismissed.cpp:14
+     rule: path_traversal.file_open
+     judgment: safe_suppressed confidence=0.98 deterministic=true
+     source: canonicalize_under_root(argv[1], "/srv/demo-root")
+     sink:   fopen(path.c_str(), "r")
+     evidence: candidate only: configured sink fopen matched rule family path_traversal; file path matches configured test marker; value resolves through local path = canonicalize_under_root(argv[1], "/srv/demo-root"); expression flows through configured sanitizer canonicalize_under_root; expression depends on parameter argv; expression references argv
+     explanation: canonicalized path is confined under a fixed root
+     safe_reasoning: canonicalized path is confined under a fixed root
+   llm_review: not requested or not eligible
 
 takeaway:
-- The deterministic engine can confirm a direct issue.
-- It can dismiss a lookalike when the validator proves a safety barrier.
-- It can still make a deterministic call on a helper-boundary case in the current MVP.
+- confirmed_issue: direct untrusted input reaches a dangerous sink without a safety barrier.
+- likely_issue: risk evidence is strong, but proof is still incomplete.
+- needs_review: the engine cannot yet prove the code safe or unsafe.
+- likely_safe: safety evidence exists, but it is not yet a full proof.
+- safe_suppressed: the validator proved a concrete safety barrier and dismissed the candidate.

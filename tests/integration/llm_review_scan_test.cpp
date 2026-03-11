@@ -77,4 +77,47 @@ TEST(LlmReviewScanTest, EnrichesOnlyEligibleFindingsWhenGatewayIsEnabled) {
   EXPECT_EQ(enriched_count, 1);
 }
 
+TEST(LlmReviewScanTest, EnrichesEligibleCuratedDemoCasesWhenGatewayIsEnabled) {
+  auto transport = std::make_shared<RecordingTransport>();
+  transport->response_body = R"({
+    "judgment": "needs_review",
+    "confidence": 0.63,
+    "cwe": "CWE-22",
+    "exploitability": "medium",
+    "reasoning_summary": "Local review stayed aligned with the deterministic result.",
+    "remediation": "Keep the guard close to the sink and make the proof explicit.",
+    "safe_reasoning": null,
+    "provider_status": "ok"
+  })";
+
+  sast::triage::ScanService service;
+  const auto bundle = service.scan({
+    .repo_root = sast::testsupport::source_root() / "tests" / "demo" / "curated",
+    .jobs = 1,
+    .llm_review = true,
+    .llm_gateway_url = "http://127.0.0.1:8081",
+    .llm_timeout_seconds = 1.0,
+    .llm_transport = transport,
+  });
+
+  EXPECT_EQ(transport->calls, 3);
+  ASSERT_TRUE(bundle.metrics.llm_latency_ms.has_value());
+
+  int enriched_count = 0;
+  for (const auto& finding : bundle.validated.findings) {
+    if (finding.candidate.file.ends_with("likely_issue_path.cpp") ||
+        finding.candidate.file.ends_with("likely_safe_path.cpp") ||
+        finding.candidate.file.ends_with("needs_review_string.cpp")) {
+      ASSERT_TRUE(finding.validation.llm_review.has_value());
+      EXPECT_EQ(finding.validation.llm_review->provider_status, "ok");
+      ++enriched_count;
+    } else if (finding.candidate.file.ends_with("confirmed_command.cpp") ||
+               finding.candidate.file.ends_with("safe_dismissed.cpp")) {
+      EXPECT_FALSE(finding.validation.llm_review.has_value());
+    }
+  }
+
+  EXPECT_EQ(enriched_count, 3);
+}
+
 }  // namespace

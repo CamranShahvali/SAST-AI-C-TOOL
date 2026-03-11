@@ -75,9 +75,25 @@ TEST(CliDemoTest, EmitsGoldenJsonOutputForBuiltinDemo) {
   std::ifstream input(output_path);
   input >> json;
   EXPECT_EQ(json.value("mode", ""), "demo");
-  EXPECT_EQ(json.value("case_count", 0), 3);
+  EXPECT_EQ(json.value("case_count", 0), 5);
   ASSERT_TRUE(json.contains("cases"));
-  ASSERT_EQ(json["cases"].size(), 3u);
+  ASSERT_EQ(json["cases"].size(), 5u);
+
+  auto case_for_slug = [&json](const std::string& slug) -> const nlohmann::json* {
+    for (const auto& item : json["cases"]) {
+      if (item.value("slug", "") == slug) {
+        return &item;
+      }
+    }
+    return nullptr;
+  };
+
+  const auto* likely_issue = case_for_slug("likely_issue");
+  const auto* likely_safe = case_for_slug("likely_safe");
+  ASSERT_NE(likely_issue, nullptr);
+  ASSERT_NE(likely_safe, nullptr);
+  EXPECT_EQ(likely_issue->at("finding").value("judgment", ""), "likely_issue");
+  EXPECT_EQ(likely_safe->at("finding").value("judgment", ""), "likely_safe");
 }
 
 }  // namespace

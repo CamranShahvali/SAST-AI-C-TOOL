@@ -21,8 +21,8 @@ struct DemoReport {
   std::string philosophy = "candidate -> validate -> prove vulnerable or dismiss";
   std::string honesty_note =
     "This is a small curated demo scanned with the deterministic engine. "
-    "It shows confirmed and dismissed outcomes on representative examples, "
-    "not complete proof across arbitrary code bases.";
+    "When enabled, any LLM review is advisory only. "
+    "It shows representative outcomes, not complete proof across arbitrary code bases.";
   std::vector<DemoCaseReport> cases;
 };
 
