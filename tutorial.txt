@@ -1,0 +1,145 @@
+AI_SAST MAINTAINER TUTORIAL
+===========================
+
+This file contains all commands needed to run, test, demo, and verify the project.
+It is intended for maintainers only.
+
+--------------------------------------------------
+PROJECT LOCATION
+--------------------------------------------------
+
+cd ~/projects/demo
+
+--------------------------------------------------
+BUILD THE PROJECT
+--------------------------------------------------
+
+cmake --build --preset clang18-debug
+
+--------------------------------------------------
+RUN ALL C++ TESTS
+--------------------------------------------------
+
+ctest --preset clang18-debug --output-on-failure
+
+--------------------------------------------------
+RUN PYTHON LLM GATEWAY TESTS
+--------------------------------------------------
+
+source .venv/bin/activate
+python -m pytest llm_gateway/tests
+
+--------------------------------------------------
+RUN DETERMINISTIC SCAN (NO AI)
+--------------------------------------------------
+
+./build/sast-cli scan --repo tests/demo/mixed_case --format text
+
+--------------------------------------------------
+RUN SCAN WITH LLM REVIEW
+--------------------------------------------------
+
+./build/sast-cli scan \
+  --repo tests/demo/mixed_case \
+  --format text \
+  --llm-review \
+  --llm-gateway http://127.0.0.1:8081
+
+--------------------------------------------------
+GENERATE JSON REPORT
+--------------------------------------------------
+
+./build/sast-cli scan \
+  --repo tests/demo/mixed_case \
+  --format json \
+  --out build/mixed_case.json
+
+--------------------------------------------------
+GENERATE SARIF REPORT
+--------------------------------------------------
+
+./build/sast-cli scan \
+  --repo tests/demo/mixed_case \
+  --format sarif \
+  --out build/mixed_case.sarif
+
+--------------------------------------------------
+RUN CURATED DEMO
+--------------------------------------------------
+
+./build/sast-cli demo
+
+--------------------------------------------------
+RUN CURATED DEMO WITH LLM
+--------------------------------------------------
+
+./build/sast-cli demo \
+  --llm-review \
+  --llm-gateway http://127.0.0.1:8081
+
+--------------------------------------------------
+RUN INTERACTIVE CLI
+--------------------------------------------------
+
+./build/sast-cli interactive
+
+--------------------------------------------------
+START LLM GATEWAY (OLLAMA)
+--------------------------------------------------
+
+source .venv/bin/activate
+
+export SAST_LLM_ENABLED=1
+export SAST_LLM_PROVIDER=ollama
+export SAST_LLM_BASE_URL=http://127.0.0.1:11434
+export SAST_LLM_MODEL=deepseek-coder:6.7b
+export SAST_LLM_TIMEOUT=30
+export SAST_LLM_MAX_RETRIES=2
+
+uvicorn llm_gateway.app.main:app --host 127.0.0.1 --port 8081
+
+--------------------------------------------------
+CHECK GATEWAY HEALTH
+--------------------------------------------------
+
+curl http://127.0.0.1:8081/health | jq .
+
+--------------------------------------------------
+RECORD CLI DEMO
+--------------------------------------------------
+
+asciinema rec -c "./docs/demo/run_demo.expect" demo.cast
+
+--------------------------------------------------
+CONVERT DEMO TO GIF
+--------------------------------------------------
+
+agg demo.cast docs/demo/demo.gif
+
+--------------------------------------------------
+CLEAN BUILD IF SOMETHING BREAKS
+--------------------------------------------------
+
+rm -rf build
+
+cmake --preset clang18-debug
+cmake --build --preset clang18-debug
+
+--------------------------------------------------
+FULL VERIFICATION SEQUENCE
+--------------------------------------------------
+
+cmake --build --preset clang18-debug
+
+ctest --preset clang18-debug --output-on-failure
+
+source .venv/bin/activate
+python -m pytest llm_gateway/tests
+
+./build/sast-cli scan --repo tests/demo/mixed_case --format text
+
+./build/sast-cli scan \
+  --repo tests/demo/mixed_case \
+  --format text \
+  --llm-review \
+  --llm-gateway http://127.0.0.1:8081
